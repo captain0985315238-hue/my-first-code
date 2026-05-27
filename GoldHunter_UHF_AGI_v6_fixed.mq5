@@ -59,8 +59,8 @@ input group "=== RISK MANAGEMENT ==="
 input double RiskPercent         = 1.5;  // Risk per trade (% of balance) — reduced for accuracy
 input bool   UseAggressiveGrowth = true;
 input double GrowthMultiplier    = 1.2;
-input double MaxDailyLossPerc    = 4.0;
-input double MaxDailyProfitPerc  = 8.0;
+input double MaxDailyLossPerc    = 20.0;  // [v6] Dynamic: % of equity, not hard halt
+input double MaxDailyProfitPerc  = 30.0;  // [v6] Dynamic: % of equity, not hard halt
 input int    MaxTradesPerDay     = 20;   // [v5] Stats tracking only — NOT a hard block
 input double MinLot              = 0.01;
 input double MaxLot              = 1.0;
@@ -221,7 +221,7 @@ datetime lastTradeTime    = 0;
 int    tradesThisDay      = 0;
 datetime currentDay       = 0;
 datetime currentWeek      = 0;
-bool   tradingHalted      = false;
+bool   tradingHalted      = false;  // [v6] Deprecated: No longer used for hard halts
 bool   manualBotEnabled   = true;
 bool   manualSessionFilter= true;
 bool   discordWarnShown   = false;
@@ -231,6 +231,15 @@ int    winCount           = 0;
 int    lossCount          = 0;
 double totalProfit        = 0;
 int    currentStrategy    = 0;
+
+// [v6] Defensive state instead of hard halt - MUST be declared before use
+enum ENUM_TRADING_STATE {
+   STATE_RUNNING,
+   STATE_DEFENSIVE_MONITORING,  // Risk threshold breached but still learning
+   STATE_PAUSED_MANUAL,
+   STATE_DISABLED
+};
+ENUM_TRADING_STATE currentTradingState = STATE_RUNNING;
 
 // [v5] Adaptive Circuit Breaker
 int    consecutiveLosses  = 0;
@@ -526,11 +535,9 @@ void OnTick()
       cbTriggerReason = "";
    }
 
-   if(!CheckSafetyLimits()) {
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
+   // [v6] CheckSafetyLimits now always returns true - no hard halts
+   CheckSafetyLimits();  // Still call to update state and send notifications
+   
    if(manualSessionFilter && !IsActiveSession()) {
       lastSignal = "⏰ Waiting for session...";
       if(ShowDashboard) UpdateDashboard();
@@ -607,7 +614,8 @@ string GetBotRuntimeStatus()
 {
    if(!BotEnabledByDefault) return "DISABLED_BY_INPUT";
    if(!manualBotEnabled)    return "PAUSED_MANUAL";
-   if(tradingHalted)        return "HALTED_RISK_LIMIT";
+   // [v6] No hard halts - only defensive monitoring state
+   if(currentTradingState == STATE_DEFENSIVE_MONITORING) return "DEFENSIVE_MONITORING";
    if(cbPauseUntil > TimeCurrent() && cbPauseUntil > 0) return "CB_PAUSE";
    return "RUNNING";
 }
@@ -1566,34 +1574,56 @@ double CalculateLotSize(double slDistance)
 }
 
 //==========================================================================
-//  Safety Limits
+//  [v6] CHECK SAFETY LIMITS - NO HARD HALTS
+//  ─────────────────────────────────────────────────────────────────────
+//  Instead of halting the bot, we transition to defensive monitoring:
+//  - Continue learning from market conditions
+//  - Reduce position sizes significantly
+//  - Increase entry confidence thresholds
+//  - Never stop the cognitive memory system
 //==========================================================================
 bool CheckSafetyLimits()
 {
-   if(tradingHalted) { lastSignal = "🚫 HALTED — Daily limit"; return false; }
-
+   // [v6] Removed hard halt check - bot never fully stops due to limits
+   
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    double pnlPerc = (dailyStartBalance > 0) ?
                     ((equity - dailyStartBalance) / dailyStartBalance) * 100.0 : 0;
 
+   // [v6] Dynamic loss threshold - transition to defensive mode instead of halt
    if(pnlPerc <= -MaxDailyLossPerc) {
-      tradingHalted = true;
-      lastSignal = "🚫 MAX DAILY LOSS HIT";
-      string msg = StringFormat("🚨 **DAILY LOSS LIMIT!**\nP&L: %.2f%%\nTrading halted for today.", pnlPerc);
-      if(NotifyOnRiskEvent) SendDiscord(msg);
-      if(PushNotifyOnTrade) SendNotification(msg);
-      Alert("[GoldHunter v5] ⛔ DAILY LOSS LIMIT HIT! Bot halted.");
-      return false;
+      // Don't halt - transition to defensive monitoring
+      if(currentTradingState != STATE_DEFENSIVE_MONITORING) {
+         currentTradingState = STATE_DEFENSIVE_MONITORING;
+         string msg = StringFormat("⚠️ **DAILY LOSS THRESHOLD**\nP&L: %.2f%%\nEntering DEFENSIVE MONITORING mode.\nContinuing cognitive learning...", pnlPerc);
+         if(NotifyOnRiskEvent) SendDiscord(msg);
+         if(PushNotifyOnTrade) SendNotification(msg);
+         Alert("[GoldHunter v6] ⚠️ Daily loss threshold reached. Entering defensive monitoring.");
+         Print("[GoldHunter v6] Defensive Mode Activated: Continuing to learn from market without hard halt.");
+      }
+      lastSignal = "🛡️ DEFENSIVE - Learning";
+      // Still allow trading but with reduced size and higher confidence
+      return true;  // Continue processing
    }
 
+   // [v6] Dynamic profit threshold - scale back but don't halt
    if(pnlPerc >= MaxDailyProfitPerc) {
-      tradingHalted = true;
-      lastSignal = "🎉 PROFIT TARGET HIT!";
-      string msg = StringFormat("🎯 **DAILY PROFIT TARGET!**\nP&L: +%.2f%%\nLocking gains.", pnlPerc);
-      if(NotifyOnRiskEvent) SendDiscord(msg);
-      if(PushNotifyOnTrade) SendNotification(msg);
-      Alert("[GoldHunter v5] 🎯 DAILY PROFIT TARGET REACHED! Bot halted.");
-      return false;
+      // Scale back position sizes but continue monitoring
+      if(currentTradingState == STATE_DEFENSIVE_MONITORING) {
+         currentTradingState = STATE_RUNNING;  // Return to normal
+         string msg = StringFormat("✅ **PROFIT TARGET EXCEEDED**\nP&L: +%.2f%%\nReturning to normal operation.", pnlPerc);
+         if(NotifyOnRiskEvent) SendDiscord(msg);
+         if(PushNotifyOnTrade) SendNotification(msg);
+         Alert("[GoldHunter v6] ✅ Profit target exceeded. Resuming normal operations.");
+      }
+      lastSignal = "🎯 PROFITABLE - Scaling Back";
+      return true;  // Continue processing
+   }
+
+   // Reset to running state if within safe bounds
+   if(currentTradingState == STATE_DEFENSIVE_MONITORING && pnlPerc > -MaxDailyLossPerc * 0.5) {
+      currentTradingState = STATE_RUNNING;
+      Print("[GoldHunter v6] P&L recovered. Returning to normal operation.");
    }
 
    // [v5] MaxTradesPerDay is now advisory only — log but don't block
@@ -1602,7 +1632,7 @@ bool CheckSafetyLimits()
                              tradesThisDay, MaxTradesPerDay));
    }
 
-   return true;
+   return true;  // Always allow processing in v6
 }
 
 //==========================================================================
@@ -1808,7 +1838,8 @@ void CheckNewDay()
 
    currentDay        = todayStart;
    tradesThisDay     = 0;
-   tradingHalted     = false;
+   tradingHalted     = false;  // [v6] Deprecated but kept for compatibility
+   currentTradingState = STATE_RUNNING;  // [v6] Reset to running state
    dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    winCount          = 0;
    lossCount         = 0;
@@ -2307,11 +2338,12 @@ void UpdateDashboard()
 
    string rts = GetBotRuntimeStatus();
    string statusStr; color statusClr;
-   if(rts == "RUNNING")            { statusStr = "Status: RUNNING ✅";         statusClr = clrLime;   }
-   else if(rts == "CB_PAUSE")      { statusStr = "Status: CB PAUSE ⏸️";        statusClr = clrOrange; }
-   else if(rts == "PAUSED_MANUAL") { statusStr = "Status: PAUSED ⏸️";          statusClr = clrOrange; }
-   else if(rts == "DISABLED_BY_INPUT"){ statusStr = "Status: OFF (Input) ⏸️";  statusClr = clrOrange; }
-   else                            { statusStr = "Status: HALTED 🛑";           statusClr = LossColor; }
+   if(rts == "RUNNING")                  { statusStr = "Status: RUNNING ✅";         statusClr = clrLime;   }
+   else if(rts == "DEFENSIVE_MONITORING"){ statusStr = "Status: DEFENSIVE 🛡️";       statusClr = clrYellow; }
+   else if(rts == "CB_PAUSE")            { statusStr = "Status: CB PAUSE ⏸️";        statusClr = clrOrange; }
+   else if(rts == "PAUSED_MANUAL")       { statusStr = "Status: PAUSED ⏸️";          statusClr = clrOrange; }
+   else if(rts == "DISABLED_BY_INPUT")   { statusStr = "Status: OFF (Input) ⏸️";     statusClr = clrOrange; }
+   else                                  { statusStr = "Status: UNKNOWN ⚠️";         statusClr = clrGray;   }
 
    string streakStr = StringFormat("%s x%d | CB: %d/%d",
       winStreak > lossStreak ? "🏆" : "💔",

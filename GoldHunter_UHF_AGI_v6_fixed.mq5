@@ -285,7 +285,7 @@ struct TradeRecord {
 struct QTableEntry {
    double qValues[3];  // 0=Buy, 1=Sell, 2=Hold
    int visitCount;
-   double lastUpdate;
+   datetime lastUpdate;
 };
 
 struct BayesianStrategyProb {
@@ -2684,7 +2684,7 @@ int Bayesian_SelectBestStrategy()
 //==========================================================================
 //  NeuralNetwork_Predict — Forward pass through pre-trained network
 //==========================================================================
-double NeuralNetwork_Predict(double inputs[])
+double NeuralNetwork_Predict(double &inputs[])
 {
    if(!UseNeuralNetwork) return 0.0;
    
@@ -2753,7 +2753,7 @@ bool NeuralNetwork_LoadWeights()
 //==========================================================================
 //  TickDelta_Update — Update circular buffer with tick volume delta
 //==========================================================================
-void TickDelta_Update(double volume, ENUM_TICK_TYPE tickType)
+void TickDelta_Update(double volume, int tickType)
 {
    if(!UseOrderFlowImbalance) return;
    
@@ -2767,7 +2767,8 @@ void TickDelta_Update(double volume, ENUM_TICK_TYPE tickType)
    }
    
    // Accumulate volume for current second
-   if(tickType == TICK_TYPE_BUY)
+   // tickType: 1 = BUY, -1 = SELL, 0 = UNKNOWN
+   if(tickType == 1)
       tickDelta.buyVolume[tickDelta.currentIndex] += volume;
    else
       tickDelta.sellVolume[tickDelta.currentIndex] += volume;

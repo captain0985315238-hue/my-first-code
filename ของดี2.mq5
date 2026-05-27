@@ -1,26 +1,26 @@
 //+------------------------------------------------------------------+
-//|         GOLDHUNTER ULTIMATE v5.0 — XM GLOBAL EDITION            |
+//|         GOLDHUNTER ULTIMATE v5.0 - XM GLOBAL EDITION            |
 //|    Professional Expert Advisor for XAUUSD (Gold) Scalp/Swing    |
 //|    Standard: XM Global MetaEditor 5 / MQL5 International v5+    |
 //|    Build Target: MT5 4000+ | Tested: XAUUSD M1/M5/M15/H1        |
 //+------------------------------------------------------------------+
 //| UPGRADE LOG v5.0 (from v4.0):                                   |
-//|  [CORE] Triple-Timeframe Confluence — M1+M5+H1 must align       |
-//|  [CORE] Candle-Close Entry Gate — no mid-candle chasing          |
+//|  [CORE] Triple-Timeframe Confluence - M1+M5+H1 must align       |
+//|  [CORE] Candle-Close Entry Gate - no mid-candle chasing          |
 //|  [CORE] Dynamic Confidence Threshold per session/regime          |
-//|  [CORE] Momentum Filter — price must be moving in signal dir     |
+//|  [CORE] Momentum Filter - price must be moving in signal dir     |
 //|  [CORE] Market Structure: Higher Highs/Lower Lows detection      |
 //|  [RISK] MaxTradesPerDay → REMOVED as hard block; stats only      |
 //|  [RISK] Consecutive-loss circuit breaker (3 losses → pause 30m) |
 //|  [RISK] Kelly-adjusted lot sizing with drawdown scaling          |
-//|  [RISK] Phantom SL guard — close if price gaps past SL           |
+//|  [RISK] Phantom SL guard - close if price gaps past SL           |
 //|  [DISCORD] Extended report: equity curve, DD%, win-streak        |
 //|  [DISCORD] Session performance breakdown per London/NY/Asian     |
 //|  [DISCORD] Weekly summary every Sunday midnight                  |
 //|  [FIX] No ghost partial-close after position reduced by BE       |
 //|  [FIX] ManagePositions only modifies if new SL > min step        |
 //+------------------------------------------------------------------+
-#property copyright "GoldHunter Ultimate v5.0 — XM Global Edition"
+#property copyright "GoldHunter Ultimate v5.0 - XM Global Edition"
 #property version   "5.00"
 #property description "Professional Gold EA | XAUUSD | XM Global MT5 | v5.0"
 #property strict
@@ -60,12 +60,12 @@ input int    StrategyMode        = 0;    // 0=Auto(AI) 1=Scalp 2=Swing 3=Breakou
 input bool   AutoSelectStrategy  = true;
 
 input group "=== RISK MANAGEMENT ==="
-input double RiskPercent         = 1.5;  // Risk per trade (% of balance) — reduced for accuracy
+input double RiskPercent         = 1.5;  // Risk per trade (% of balance) - reduced for accuracy
 input bool   UseAggressiveGrowth = true;
 input double GrowthMultiplier    = 1.2;
 input double MaxDailyLossPerc    = 4.0;
 input double MaxDailyProfitPerc  = 8.0;
-input int    MaxTradesPerDay     = 20;   // [v5] Stats tracking only — NOT a hard block
+input int    MaxTradesPerDay     = 20;   // [v5] Stats tracking only - NOT a hard block
 input double MinLot              = 0.01;
 input double MaxLot              = 1.0;
 
@@ -101,7 +101,7 @@ input bool   UseAdaptiveCB         = true;  // Enable Adaptive Circuit Breaker
 input double CB_LossPctTrigger     = 2.0;   // Trigger CB when session loss >= X% of balance
 input double CB_EquityDDTrigger    = 3.0;   // Trigger CB when equity drops X% from session peak
 input int    CB_MaxConsecLosses    = 3;     // Also trigger if N consecutive losses
-// Pause duration is DYNAMIC — calculated from market volatility (ATR) + loss severity
+// Pause duration is DYNAMIC - calculated from market volatility (ATR) + loss severity
 // Minimum and maximum bounds only:
 input int    CB_MinPauseMinutes    = 10;    // Minimum pause (minutes)
 input int    CB_MaxPauseMinutes    = 120;   // Maximum pause (minutes)
@@ -158,7 +158,7 @@ input int    ScalpMinPoints      = 50;
 
 input group "=== EXECUTION SETTINGS ==="
 input int    TradeCooldownSec    = 5;
-input bool   TickBasedEntry      = false; // [v5] default OFF — wait for bar close
+input bool   TickBasedEntry      = false; // [v5] default OFF - wait for bar close
 input int    MaxSpreadPips       = 35;
 input int    SlippagePoints      = 30;
 input bool   ShowDebugLog        = true;
@@ -370,7 +370,7 @@ void OnDeinit(const int reason)
 }
 
 //==========================================================================
-//  OnTick — Main Loop
+//  OnTick - Main Loop
 //==========================================================================
 void OnTick()
 {
@@ -411,7 +411,7 @@ void OnTick()
    // [v5] Circuit breaker check
    if(cbPauseUntil > 0 && TimeCurrent() < cbPauseUntil) {
       int remaining = (int)(cbPauseUntil - TimeCurrent()) / 60;
-      lastSignal = StringFormat("⏸️ CB PAUSE — %dm left", remaining);
+      lastSignal = StringFormat("⏸️ CB PAUSE - %dm left", remaining);
       if(ManagePositionsWhenPaused) ManagePositions();
       if(ShowDashboard) UpdateDashboard();
       return;
@@ -421,7 +421,7 @@ void OnTick()
       consecutiveLosses = 0;
       sessionPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY); // reset session peak after pause
       if(NotifyOnBotState)
-         SendDiscord(StringFormat("✅ **ADAPTIVE CB LIFTED** — Trading resumed.\n"
+         SendDiscord(StringFormat("✅ **ADAPTIVE CB LIFTED** - Trading resumed.\n"
                                   "Trigger was: `%s`\n"
                                   "Paused for: `%d min`\n"
                                   "Equity now: `$%.2f`",
@@ -443,7 +443,7 @@ void OnTick()
 
    ManagePositions();
 
-   // [v5] Bar-close gate — wait for confirmed candle
+   // [v5] Bar-close gate - wait for confirmed candle
    static datetime lastBar = 0;
    datetime currentBar     = iTime(Symbol(), PERIOD_CURRENT, 0);
    bool isNewBar           = (currentBar != lastBar);
@@ -536,7 +536,7 @@ void UpdateBotControlButton()
    if(ObjectFind(ChartID(), BOT_BUTTON_NAME) < 0) CreateBotControlButton();
    bool active = IsBotTradingAllowed();
    ObjectSetString(ChartID(),  BOT_BUTTON_NAME, OBJPROP_TEXT,
-                   active ? "✅ BOT ON — คลิกปิด" : "⛔ BOT OFF — คลิกเปิด");
+                   active ? "✅ BOT ON - คลิกปิด" : "⛔ BOT OFF - คลิกเปิด");
    ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_BGCOLOR, active ? clrDarkGreen : clrFireBrick);
    ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_COLOR, clrWhite);
    ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_STATE, false);
@@ -639,7 +639,7 @@ bool UpdateIndicators()
 }
 
 //==========================================================================
-//  [v5] IsStrongConfluence — M1 + M5 + H1 must agree
+//  [v5] IsStrongConfluence - M1 + M5 + H1 must agree
 //==========================================================================
 bool IsStrongConfluence(bool isBuy)
 {
@@ -678,7 +678,7 @@ bool IsStrongConfluence(bool isBuy)
 }
 
 //==========================================================================
-//  [v5] IsMomentumAligned — last 3 bars moving in direction
+//  [v5] IsMomentumAligned - last 3 bars moving in direction
 //==========================================================================
 bool IsMomentumAligned(bool isBuy)
 {
@@ -695,7 +695,7 @@ bool IsMomentumAligned(bool isBuy)
 }
 
 //==========================================================================
-//  [v5] Market Structure — HH/HL or LH/LL over last 20 bars
+//  [v5] Market Structure - HH/HL or LH/LL over last 20 bars
 //==========================================================================
 bool IsMarketStructureBull()
 {
@@ -719,7 +719,7 @@ bool IsMarketStructureBear()
 }
 
 //==========================================================================
-//  DetectMarketRegime — 1=Bull 2=Bear 3=Ranging 4=Volatile 5=Calm
+//  DetectMarketRegime - 1=Bull 2=Bear 3=Ranging 4=Volatile 5=Calm
 //==========================================================================
 int DetectMarketRegime()
 {
@@ -780,7 +780,7 @@ bool IsEngulfingBar(ENUM_TIMEFRAMES tf, int shift)
 }
 
 //==========================================================================
-//  [v5] GetDynamicConfidence — adjust threshold per session/regime
+//  [v5] GetDynamicConfidence - adjust threshold per session/regime
 //==========================================================================
 double GetDynamicMinConfidence()
 {
@@ -788,14 +788,14 @@ double GetDynamicMinConfidence()
    int regime  = DetectMarketRegime();
 
    // Require higher confidence in choppy/volatile markets
-   if(regime == 3) base += 5.0;  // ranging — harder to predict
-   if(regime == 4) base += 8.0;  // volatile — higher bar
+   if(regime == 3) base += 5.0;  // ranging - harder to predict
+   if(regime == 4) base += 8.0;  // volatile - higher bar
 
    // Lower threshold during high-probability sessions
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
    double t = dt.hour + dt.min / 60.0;
-   if(t >= 8.0 && t <= 12.0) base -= 3.0; // London open — best hours
+   if(t >= 8.0 && t <= 12.0) base -= 3.0; // London open - best hours
    if(t >= 13.0 && t <= 16.0) base -= 2.0; // London/NY overlap
 
    return MathMax(55.0, MathMin(80.0, base));
@@ -1094,7 +1094,7 @@ void GetAdaptiveSLTPMultipliers(int regime, double &sl_m, double &tp_m)
 }
 
 //==========================================================================
-//  TryPlaceOrder — fill type retry
+//  TryPlaceOrder - fill type retry
 //==========================================================================
 bool TryPlaceOrder(ENUM_ORDER_TYPE type, double lots, double price,
                    double sl, double tp, string comment)
@@ -1106,7 +1106,7 @@ bool TryPlaceOrder(ENUM_ORDER_TYPE type, double lots, double price,
    if(ok) return true;
 
    uint retcode = trade.ResultRetcode();
-   LogStatus(StringFormat("IOC failed: %s (%d) — retrying FOK", RetcodeToString(retcode), retcode));
+   LogStatus(StringFormat("IOC failed: %s (%d) - retrying FOK", RetcodeToString(retcode), retcode));
 
    trade.SetTypeFilling(ORDER_FILLING_FOK);
    ok = (type == ORDER_TYPE_BUY) ?
@@ -1115,7 +1115,7 @@ bool TryPlaceOrder(ENUM_ORDER_TYPE type, double lots, double price,
    if(ok) { trade.SetTypeFilling(ORDER_FILLING_IOC); return true; }
 
    retcode = trade.ResultRetcode();
-   LogStatus(StringFormat("FOK failed: %s (%d) — retrying RETURN", RetcodeToString(retcode), retcode));
+   LogStatus(StringFormat("FOK failed: %s (%d) - retrying RETURN", RetcodeToString(retcode), retcode));
 
    trade.SetTypeFilling(ORDER_FILLING_RETURN);
    ok = (type == ORDER_TYPE_BUY) ?
@@ -1131,7 +1131,7 @@ bool TryPlaceOrder(ENUM_ORDER_TYPE type, double lots, double price,
 }
 
 //==========================================================================
-//  ExecuteSignal — [v5] adds confluence + momentum + dynamic confidence
+//  ExecuteSignal - [v5] adds confluence + momentum + dynamic confidence
 //==========================================================================
 void ExecuteSignal(MarketScore &score)
 {
@@ -1252,7 +1252,7 @@ void ExecuteSignal(MarketScore &score)
       }
    }
    else {
-      LogStatus(StringFormat("Weak signal — B:%d S:%d Conf:%.0f%% Need:%.0f%%",
+      LogStatus(StringFormat("Weak signal - B:%d S:%d Conf:%.0f%% Need:%.0f%%",
                              score.buyScore, score.sellScore,
                              score.confidence, dynConfidence));
       lastSignal = StringFormat("⏳ B:%d S:%d [%.0f%%/%.0f%%]",
@@ -1325,7 +1325,7 @@ bool ClosePartialPosition(ulong ticket, double volumeToClose)
 }
 
 //==========================================================================
-//  ManagePositions — [v5] adds phantom SL guard + min-step check
+//  ManagePositions - [v5] adds phantom SL guard + min-step check
 //==========================================================================
 void ManagePositions()
 {
@@ -1355,7 +1355,7 @@ void ManagePositions()
          double beDist    = UseBreakEven ? (atrValue * BreakEvenATR) :
                             (UseAdvancedBreakeven ? (BreakevenBufferPips * symbolInfo.Point()) : 0);
 
-         // [v5] Phantom SL guard — price gapped past SL
+         // [v5] Phantom SL guard - price gapped past SL
          if(curSL > 0 && bid < curSL) {
             trade.PositionClose(ticket);
             continue;
@@ -1431,7 +1431,7 @@ void ManagePositions()
 }
 
 //==========================================================================
-//  CalculateLotSize — [v5] Kelly-adjusted with DD scaling
+//  CalculateLotSize - [v5] Kelly-adjusted with DD scaling
 //==========================================================================
 double CalculateLotSize(double slDistance)
 {
@@ -1446,7 +1446,7 @@ double CalculateLotSize(double slDistance)
       if(riskPct > 8.0) riskPct = 8.0;
    }
 
-   // [v5] Drawdown scaling — reduce risk when in drawdown
+   // [v5] Drawdown scaling - reduce risk when in drawdown
    if(peakEquity > 0) {
       double ddPct = (peakEquity - equity) / peakEquity * 100.0;
       if(ddPct > 5.0)  riskPct *= 0.75;  // 5%+ DD → reduce lot 25%
@@ -1477,7 +1477,7 @@ double CalculateLotSize(double slDistance)
 //==========================================================================
 bool CheckSafetyLimits()
 {
-   if(tradingHalted) { lastSignal = "🚫 HALTED — Daily limit"; return false; }
+   if(tradingHalted) { lastSignal = "🚫 HALTED - Daily limit"; return false; }
 
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    double pnlPerc = (dailyStartBalance > 0) ?
@@ -1503,9 +1503,9 @@ bool CheckSafetyLimits()
       return false;
    }
 
-   // [v5] MaxTradesPerDay is now advisory only — log but don't block
+   // [v5] MaxTradesPerDay is now advisory only - log but don't block
    if(tradesThisDay >= MaxTradesPerDay) {
-      LogStatus(StringFormat("Note: Trades today (%d) exceed advisory limit (%d) — continuing",
+      LogStatus(StringFormat("Note: Trades today (%d) exceed advisory limit (%d) - continuing",
                              tradesThisDay, MaxTradesPerDay));
    }
 
@@ -1633,7 +1633,7 @@ void CheckConsecutiveLossCB()
    cbPauseMinutesLast= pauseMinutes;
 
    //--- After pause, force re-evaluation of strategy
-   //    (stored in currentStrategy — will be recomputed on resume naturally)
+   //    (stored in currentStrategy - will be recomputed on resume naturally)
 
    string msg = StringFormat(
       "⚠️ **ADAPTIVE CIRCUIT BREAKER**\n"
@@ -1741,7 +1741,7 @@ void CheckWeeklyReport()
       double weekPnLPct = (weeklyStartBalance > 0) ? weekPnL / weeklyStartBalance * 100.0 : 0;
 
       SendDiscord(StringFormat(
-         "📅 **WEEKLY SUMMARY — GoldHunter v5**\n"
+         "📅 **WEEKLY SUMMARY - GoldHunter v5**\n"
          "Week: `%s`\n"
          "💵 Week P&L: `%s$%.2f` (`%+.2f%%`)\n"
          "💰 Balance: `$%.2f`\n"
@@ -1842,13 +1842,13 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
             (netProfit >= 0 ? "+" : "-"), MathAbs(netProfit),
             curBalance, winCount, lossCount, wr,
             (netProfit > 0 ? "🏆" : "💔"), (netProfit > 0 ? winStreak : lossStreak),
-            consecutiveLosses, MaxConsecutiveLosses));
+            consecutiveLosses, CB_MaxConsecLosses));
       }
    }
 }
 
 //==========================================================================
-//  [v5] SendDiscordExtendedReport — Daily + Session Breakdown
+//  [v5] SendDiscordExtendedReport - Daily + Session Breakdown
 //==========================================================================
 void SendDiscordExtendedReport()
 {
@@ -1869,7 +1869,7 @@ void SendDiscordExtendedReport()
    int aswrPct     = asianTotal  > 0 ? (int)(asianWins  * 100.0 / asianTotal)  : 0;
 
    SendDiscord(StringFormat(
-      "📋 **DAILY REPORT — GoldHunter v5 — %s**\n"
+      "📋 **DAILY REPORT - GoldHunter v5 - %s**\n"
       "━━━━━━━━━━━━━━━━━━━━\n"
       "📊 Trades: `%d` (Advisory max: %d)\n"
       "✅ Win: `%d`  ❌ Loss: `%d`  WR: `%d%%`\n"
@@ -1924,7 +1924,7 @@ void SendPnLAlert(string action, double grossProfit, double netProfit,
       (dayPnL >= 0 ? "+" : "-"), MathAbs(dayPnL),
       winCount, lossCount,
       (netProfit > 0 ? StringFormat("Win x%d", winStreak) : StringFormat("Loss x%d", lossStreak)),
-      consecutiveLosses, MaxConsecutiveLosses);
+      consecutiveLosses, CB_MaxConsecLosses);
 
    if(AlertOnTradeClose) Alert(alertMsg);
 
@@ -2059,7 +2059,7 @@ void SendDiscordStartupReport()
 {
    if(!NotifyOnBotState) return;
    SendDiscord(StringFormat(
-      "💎 **GOLDHUNTER ULTIMATE v%s — XM EDITION**\n"
+      "💎 **GOLDHUNTER ULTIMATE v%s - XM EDITION**\n"
       "━━━━━━━━━━━━━━━━━━━━\n"
       "Account: `%d` | Broker: `%s`\n"
       "Symbol: `%s` | TF: `%s`\n"
@@ -2082,7 +2082,7 @@ void SendDiscordStartupReport()
       AccountInfoDouble(ACCOUNT_EQUITY),
       stratNames[StrategyMode], RiskPercent,
       MinConfidence,
-      MaxConsecutiveLosses, CBPauseMinutes,
+      CB_MaxConsecLosses, CB_MinPauseMinutes,
       GetBotRuntimeStatus()));
 }
 
@@ -2174,7 +2174,7 @@ void CreateDashboard()
    CreateLabel(p+"sep4",    x+10, y+246, "──────────────────────────────",   clrDimGray,   7);
    CreateLabel(p+"trades",  x+10, y+260, "Today: 0 trades (no limit)",        TextColor,    9);
    CreateLabel(p+"winrate", x+10, y+278, "Win: 0  Loss: 0  WR: 0%",           TextColor,    9);
-   CreateLabel(p+"streak",  x+10, y+296, "Streak: — | CB: 0/3",               TextColor,    9);
+   CreateLabel(p+"streak",  x+10, y+296, "Streak: - | CB: 0/3",               TextColor,    9);
    CreateLabel(p+"session", x+10, y+314, "Session: --",                        clrYellow,    9);
    CreateLabel(p+"conf",    x+10, y+332, "Conf Threshold: 62%",                clrCyan,      9);
    CreateLabel(p+"status",  x+10, y+350, "Status: RUNNING ✅",                clrLime,      9);
@@ -2223,7 +2223,7 @@ void UpdateDashboard()
    string streakStr = StringFormat("%s x%d | CB: %d/%d",
       winStreak > lossStreak ? "🏆" : "💔",
       winStreak > lossStreak ? winStreak : lossStreak,
-      consecutiveLosses, MaxConsecutiveLosses);
+      consecutiveLosses, CB_MaxConsecLosses);
 
    double dynConf = GetDynamicMinConfidence();
 
@@ -2262,5 +2262,5 @@ void UpdateDashboard()
    ChartRedraw(ChartID());
 }
 //+------------------------------------------------------------------+
-//| END OF FILE — GoldHunter Ultimate v5.0 XM Edition               |
+//| END OF FILE - GoldHunter Ultimate v5.0 XM Edition               |
 //+------------------------------------------------------------------+

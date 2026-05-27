@@ -1,45 +1,31 @@
 ```
-# Compiled files
-*.mq5o
+# Compiled/Binary files
+*.mq5c
 *.ex5
-*.mqh
-*.mq4o
-*.ex4
-
-# Build artifacts
 *.dll
 *.so
-*.dylib
-*.lib
 *.a
+*.obj
+*.out
 
 # Dependencies
+lib/
 Libraries/
-Include/
-MQL5/Libraries/
 
-# Logs and temporary files
+# Build artifacts
+tester/
+testers/
+logs/
 *.log
-*.tmp
-*.temp
 
 # Editor/IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
+*.tmp
 
-# Environment
-.env
-.env.local
-*.env.*
-
-# Coverage and testing
-coverage/
-htmlcov/
-.coverage
-
-# OS generated files
+# System files
 .DS_Store
 Thumbs.db
 ```

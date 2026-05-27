@@ -1,4 +1,25 @@
 ```
 # Compiled files
-*.mq5
+*.mq5o
+*.ex5
+*.mqh
+
+# Build artifacts
+*.dll
+*.so
+*.lib
+*.obj
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.~*
+
+# MT5 specific
+MQL5/Templates/
+MQL5/Profiles/
+tester/
 ```

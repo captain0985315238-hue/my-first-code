@@ -1,31 +1,4 @@
 ```
-# Compiled/Binary files
-*.mq5c
-*.ex5
-*.dll
-*.so
-*.a
-*.obj
-*.out
-
-# Dependencies
-lib/
-Libraries/
-
-# Build artifacts
-tester/
-testers/
-logs/
-*.log
-
-# Editor/IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-
-# System files
-.DS_Store
-Thumbs.db
+# Compiled files
+*.mq5
 ```

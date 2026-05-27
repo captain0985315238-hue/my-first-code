@@ -2689,7 +2689,7 @@ int Bayesian_SelectBestStrategy()
 //==========================================================================
 //  NeuralNetwork_Predict — Forward pass through pre-trained network
 //==========================================================================
-double NeuralNetwork_Predict(double &inputs[10])
+double NeuralNetwork_Predict(double &inputs[])
 {
    if(!UseNeuralNetwork) return 0.0;
    

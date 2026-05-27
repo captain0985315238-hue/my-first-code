@@ -304,6 +304,11 @@ struct NeuralNetworkLayer {
    double outputBias;
 };
 
+// [v7] Tick type constants for order flow analysis
+#define TICK_TYPE_BUY   1
+#define TICK_TYPE_SELL -1
+#define TICK_TYPE_UNKNOWN 0
+
 struct TickDeltaBuffer {
    double buyVolume[60];    // 60-second circular buffer
    double sellVolume[60];
@@ -2442,7 +2447,7 @@ void InitializeQTable()
             qTable[idx].qValues[1] = 0.0;  // Initial Q for Sell
             qTable[idx].qValues[2] = 0.0;  // Initial Q for Hold
             qTable[idx].visitCount = 0;
-            qTable[idx].lastUpdate = TimeCurrent();
+            qTable[idx].lastUpdate = (datetime)TimeCurrent();
          }
       }
    }
@@ -2525,7 +2530,7 @@ void QLearning_Update(int stateIdx, int action, double reward, int nextStateIdx)
    double newQ = currentQ + Q_LEARNING_RATE * (reward + Q_DISCOUNT_FACTOR * maxNextQ - currentQ);
    qTable[stateIdx].qValues[action] = newQ;
    qTable[stateIdx].visitCount++;
-   qTable[stateIdx].lastUpdate = TimeCurrent();
+   qTable[stateIdx].lastUpdate = (datetime)TimeCurrent();
 }
 
 //==========================================================================
@@ -2684,7 +2689,7 @@ int Bayesian_SelectBestStrategy()
 //==========================================================================
 //  NeuralNetwork_Predict — Forward pass through pre-trained network
 //==========================================================================
-double NeuralNetwork_Predict(double &inputs[])
+double NeuralNetwork_Predict(double &inputs[10])
 {
    if(!UseNeuralNetwork) return 0.0;
    
@@ -3006,12 +3011,6 @@ double DynamicKelly_CalculateLotSize(double slDistance)
    
    return NormalizeDouble(lotSize, 2);
 }
-
-//==========================================================================
-//  OnTradeTransaction — Enhanced with learning updates [v7]
-//==========================================================================
-// Note: This replaces the existing OnTradeTransaction, adding learning logic
-// The original function is at line ~1773, we'll update it in place
 
 //+------------------------------------------------------------------+
 //| END OF FILE — GoldHunter UHF AGI v7.0 ASI Edition                |

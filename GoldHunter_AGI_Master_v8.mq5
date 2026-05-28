@@ -43,6 +43,55 @@ bool     IsMarketStructureBull();
 bool     IsMarketStructureBear();
 void     SendDiscordExtendedReport();
 void     CheckConsecutiveLossCB();
+void     AgentLoop();
+void     Phase_Reflect(AgentContext &ctx);
+void     Dashboard_AGI_Update(AgentContext &ctx);
+void     RunSpecialistAgents(AgentContext &ctx);
+void     SafetyLayer_PostCheck(AgentContext &ctx);
+void     NN_BuildInputVector(double &inputs[], AgentContext &ctx);
+bool     ValidationLayer_Check(double proposed_lots, double proposed_sl_dist,
+                               double proposed_entry, ENUM_ORDER_TYPE proposed_dir,
+                               string &out_reason);
+bool     ExecuteOrderDAG(ENUM_ORDER_TYPE type, double lots, double price, 
+                         double sl, double tp, string comment);
+double   NN_Forward(const double &inputs[]);
+bool     HardStop_CheckAll();
+string   DetectMarketRegimeName(int regime);
+int      DetectMarketRegime();
+bool     UpdateIndicators();
+void     UpdateDashboard();
+void     ManagePositions();
+bool     IsBotTradingAllowed();
+bool     IsActiveSession();
+string   SelectBestStrategy();
+MarketScore StrategyScalping();
+MarketScore StrategySwing();
+MarketScore StrategyBreakout();
+MarketScore StrategyReversal();
+MarketScore StrategyAutoAI();
+void     ExecuteSignal(MarketScore &score);
+void     CheckSafetyLimits();
+void     SendDiscord(string message);
+void     CreateDashboard();
+void     CheckNewDay();
+void     CheckWeeklyReport();
+void     SendDiscordStartupReport();
+void     SendDiscordShutdownReport(int reason);
+void     UpdateWorkingMemory(int regime, double confidence);
+void     NN_TrainOnTradeOutcome(const double &inputs[], double reward);
+void     QTable_Update(int state, int action, double reward, double new_max_q);
+int      QTable_GetAction(int state);
+double   QTable_GetValue(int state, int action);
+void     QTable_Load();
+void     QTable_Save();
+void     NN_LoadWeights_Binary();
+void     NN_SaveWeights_Binary();
+void     LoadEpisodicMemory();
+void     SaveEpisodicMemory();
+void     AuditLog_Write(string category, string message);
+void     PipelineTraceLog(string phase, string status, string details);
+void     PrintPipelineTrace();
+string   GetVetoReason();
 
 CTrade         trade;
 CSymbolInfo    symbolInfo;
@@ -1771,6 +1820,7 @@ input bool   UseSelfHealingOptimizer  = true;   // [v7] Auto-optimize parameters
 #define Q_EPSILON 0.15
 #define Q_LAMBDA 0.7           // PHASE 5: Eligibility trace decay
 #define NN_LEARNING_RATE 0.05  // PHASE 5: NN backprop learning rate
+#define MAX_PIPELINE_TRACE 50
 
 // [v7] MarketScore struct (original from v6)
 struct MarketScore {
@@ -1827,7 +1877,6 @@ struct AgentContext {
 //==========================================================================
 string pipelineTrace[];
 int pipelineTraceHead = 0;
-#define MAX_PIPELINE_TRACE 50
 
 void PipelineTraceLog(string phase, string status, string details)
 {

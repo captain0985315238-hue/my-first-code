@@ -1,0 +1,43 @@
+```
+# Compiled and binary files
+*.mq5c
+*.ex5
+*.mqh
+*.mq4c
+
+# Build artifacts
+*.dll
+*.so
+*.dylib
+
+# Dependencies
+Libraries/
+Include/
+MQL4/
+MQL5/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Coverage and testing
+coverage/
+htmlcov/
+.coverage
+
+# OS specific
+.DS_Store
+Thumbs.db
+```

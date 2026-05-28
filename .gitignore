@@ -1,25 +1,63 @@
 ```
-# Compiled files
-*.mq5o
+# Compiled and build artifacts
+*.mqe
 *.ex5
-*.mqh
-
-# Build artifacts
+*.gsc
+*.os
+*.psc
+*.fxc
+*.glsl
+*.obj
+*.o
+*.a
+*.lib
 *.dll
 *.so
+*.dylib
+*.exe
+*.out
+
+# Dependencies
+lib/
+include/
+*.dll
+*.so
+*.a
 *.lib
-*.obj
 
-# Logs
+# Logs and temp files
 *.log
-
-# Temporary files
 *.tmp
+*.temp
 *.bak
-*.~*
+*.backup
 
-# MT5 specific
-MQL5/Templates/
-MQL5/Profiles/
-tester/
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build directories
+build/
+dist/
+target/
+release/
+debug/
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Coverage and test results
+coverage/
+htmlcov/
+*.coverage
+.pytest_cache/
+.mypy_cache/
+
+# OS generated files
+.DS_Store
+Thumbs.db
 ```

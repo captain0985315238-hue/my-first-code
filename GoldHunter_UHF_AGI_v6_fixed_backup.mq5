@@ -1,19 +1,24 @@
 //+------------------------------------------------------------------+
-//|         GOLDHUNTER ULTIMATE v8.0 UHF AGI — XM GLOBAL EDITION            |
-//|    Ultra-High-Frequency AGI Trading Bot for XAUUSD (Gold) Scalp/Swing    |
+//|         GOLDHUNTER ULTIMATE v7.0 UHF ASI AGI — XM GLOBAL EDITION            |
+//|    Ultra-High-Frequency ASI Trading Bot for XAUUSD (Gold) Scalp/Swing    |
 //|    Standard: MetaEditor 5 / XM Global MT5 Servers    |
 //|    Build Target: MT5 4000+ | Tested: XAUUSD M1/M5/M15/H1        |
 //+------------------------------------------------------------------+
-//| UPGRADE LOG v8.0 AGI (from v7.0):                                   |
-//|  [CORE] OODA Agent Loop — formal Observe-Orient-Decide-Act pipeline |
-//|  [CORE] AgentContext envelope — typed message passing between phases |
-//|  [CORE] PipelineTrace logging — mechanistic interpretability chain  |
-//|  [CORE] Safety Layer gates — pre-check and post-check architecture  |
-//|  [ARCH] Decomposed OnTick() — six named pipeline functions          |
+//| UPGRADE LOG v7.0 ASI AGI (from v6.0):                                   |
+//|  [CORE] Time-Lock Constraints REMOVED — 24/7 dynamic execution       |
+//|  [CORE] Q-Learning Reinforcement — self-tuning entry weights         |
+//|  [CORE] Bayesian Inference — posterior probability strategy select   |
+//|  [CORE] Neural Network Layer — 10-input feedforward network          |
+//|  [RISK] Dynamic Kelly Criterion — rolling 50-trade win rate sizing   |
+//|  [RISK] Multi-Symbol Correlation Guard — DXY correlation check       |
+//|  [RISK] Order Flow Imbalance — tick delta 3σ trigger                 |
+//|  [RISK] Self-Healing Optimizer — auto grid-search every 20 trades    |
+//|  [LEARN] Trade History CSV — memorize losing patterns                |
+//|  [LEARN] Q-Table Persistence — save/load learned policies            |
 //+------------------------------------------------------------------+
-#property copyright "GoldHunter UHF AGI v8.0 — XM Global Ultimate Edition"
-#property version   "8.00"
-#property description "UHF Gold EA | XAUUSD | 1-Second Execution | AGI OODA Loop"
+#property copyright "GoldHunter UHF ASI v7.0 — XM Global Ultimate Edition"
+#property version   "7.00"
+#property description "UHF Gold EA | XAUUSD | 1-Second Execution | ASI Adaptive Learning"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -373,127 +378,6 @@ struct MarketScore {
    string reasons;
    double confidence;
 };
-
-//==========================================================================
-//  PHASE 1: AGENT CONTEXT STRUCT (OODA Message Envelope)
-//==========================================================================
-struct AgentContext {
-   // Observation outputs
-   bool           dataValid;
-   int            marketRegime;       // 1=Bull 2=Bear 3=Ranging 4=Volatile 5=Calm
-   double         atrValue, rsiValue, adxValue, emaFast, emaSlow, emaTrend;
-   double         macdMain, macdSignal, bbUpper, bbMiddle, bbLower;
-   double         stochMain, stochSignal, plusDI, minusDI;
-   double         averageVolume, prevAtrValue, emaTrend_HTF;
-   // Multi-TF buffers for confluence sub-agents
-   double         m5EMAFast, m5EMASlow, m5RSI;
-   double         h1EMAFast, h1EMASlow, h1RSI;
-
-   // Orientation outputs (vote aggregation)
-   int            agentBuyVotes;       // sum of specialist agent BUY votes
-   int            agentSellVotes;      // sum of specialist agent SELL votes
-   double         aggregateConfidence; // 0.0–100.0
-   string         decisionReasons;
-   int            selectedStrategy;    // 0=Auto 1=Scalp 2=Swing 3=Breakout 4=Reversal
-
-   // Decision outputs
-   bool           tradingAllowed;      // all gates passed
-   string         blockReason;         // if tradingAllowed=false, why
-
-   // Plan outputs
-   ENUM_ORDER_TYPE proposedType;
-   double         proposedLots;
-   double         proposedEntry;
-   double         proposedSL;
-   double         proposedTP;
-
-   // Execution outputs
-   bool           orderPlaced;
-   ulong          placedTicket;
-   uint           lastRetcode;
-
-   // Reflection outputs
-   bool           reflectionComplete;
-};
-
-//==========================================================================
-//  PHASE 1: PIPELINE TRACE LOGGING (Mechanistic Interpretability)
-//==========================================================================
-string pipelineTrace[];
-int pipelineTraceHead = 0;
-#define MAX_PIPELINE_TRACE 50
-
-void PipelineTraceLog(string phase, string status, string details)
-{
-   string entry = StringFormat("[%s][%s][%d] %s", phase, status, GetTickCount(), details);
-   
-   if(ArraySize(pipelineTrace) < MAX_PIPELINE_TRACE) {
-      ArrayResize(pipelineTrace, ArraySize(pipelineTrace) + 1);
-      pipelineTrace[ArraySize(pipelineTrace)-1] = entry;
-   } else {
-      // Circular buffer: overwrite oldest
-      pipelineTrace[pipelineTraceHead] = entry;
-      pipelineTraceHead = (pipelineTraceHead + 1) % MAX_PIPELINE_TRACE;
-   }
-}
-
-void PrintPipelineTrace()
-{
-   LogStatus("=== PIPELINE TRACE ===");
-   int start = (ArraySize(pipelineTrace) < MAX_PIPELINE_TRACE) ? 0 : pipelineTraceHead;
-   int count = ArraySize(pipelineTrace);
-   for(int i = 0; i < count; i++) {
-      int idx = (start + i) % count;
-      Print(pipelineTrace[idx]);
-   }
-}
-
-//==========================================================================
-//  PHASE 1: SAFETY LAYER PRE-CHECK
-//==========================================================================
-bool SafetyLayer_PreCheck()
-{
-   // Check if bot is enabled
-   if(!IsBotTradingAllowed()) {
-      PipelineTraceLog("SAFETY", "BLOCK", "Bot not enabled");
-      return false;
-   }
-   
-   // Check circuit breaker pause
-   if(cbPauseUntil > 0 && TimeCurrent() < cbPauseUntil) {
-      PipelineTraceLog("SAFETY", "BLOCK", "Circuit breaker active");
-      return false;
-   }
-   
-   // Lift circuit breaker if time expired
-   if(cbPauseUntil > 0 && TimeCurrent() >= cbPauseUntil) {
-      cbPauseUntil      = 0;
-      consecutiveLosses = 0;
-      sessionPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-      if(NotifyOnBotState)
-         SendDiscord(StringFormat("✅ **ADAPTIVE CB LIFTED** — Trading resumed.\n"
-                                  "Trigger was: `%s`\n"
-                                  "Paused for: `%d min`\n"
-                                  "Equity now: `$%.2f`",
-                                  cbTriggerReason, cbPauseMinutesLast,
-                                  AccountInfoDouble(ACCOUNT_EQUITY)));
-      cbTriggerReason = "";
-      PipelineTraceLog("SAFETY", "CB_LIFTED", "Circuit breaker lifted");
-   }
-   
-   return true;
-}
-
-void SafetyLayer_PostCheck(AgentContext &ctx)
-{
-   // Update trading state based on outcomes
-   CheckSafetyLimits();
-   
-   // Log final pipeline state
-   if(ctx.orderPlaced) {
-      PipelineTraceLog("SAFETY", "OK", "Trade executed, ticket="+(string)ctx.placedTicket);
-   }
-}
 
 //==========================================================================
 //  OnInit

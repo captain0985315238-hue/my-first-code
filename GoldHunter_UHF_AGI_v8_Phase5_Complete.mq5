@@ -3025,7 +3025,7 @@ int Bayesian_SelectBestStrategy()
 //==========================================================================
 //  NeuralNetwork_Predict — Forward pass through pre-trained network
 //==========================================================================
-double NeuralNetwork_Predict(double inputs[])
+double NeuralNetwork_Predict(const double &inputs[])
 {
    if(!UseNeuralNetwork) return 0.0;
 
@@ -3132,7 +3132,7 @@ void Xavier_InitWeights()
 //+------------------------------------------------------------------+
 //| NN_BuildInputVector — Build normalized 10-input feature vector   |
 //+------------------------------------------------------------------+
-void NN_BuildInputVector(double inputs[])
+void NN_BuildInputVector(const double &inputs[], AgentContext &ctx)
 {
    // All inputs normalized to [-1, +1] using historical min/max or natural bounds
    inputs[0] = (rsiValue - 50.0) / 50.0;                           // RSI: [0,100] → [-1,+1]
@@ -3151,7 +3151,7 @@ void NN_BuildInputVector(double inputs[])
 //+------------------------------------------------------------------+
 //| NN_Forward — Forward pass with tanh activation                   |
 //+------------------------------------------------------------------+
-double NN_Forward(double inputs[])
+double NN_Forward(const double &inputs[])
 {
    double hidden[15];
    
@@ -3176,7 +3176,7 @@ double NN_Forward(double inputs[])
 //+------------------------------------------------------------------+
 //| NN_Backprop — Online learning with gradient clipping             |
 //+------------------------------------------------------------------+
-void NN_Backprop(double inputs[], double target, double learningRate)
+void NN_Backprop(const double &inputs[], double target, double learningRate)
 {
    double hidden[15];
    double hiddenDelta[15];
@@ -3366,7 +3366,7 @@ int GetCurrentSessionBucket()
 //+------------------------------------------------------------------+
 //| NN_TrainOnTradeOutcome — Train NN on closed trade outcome        |
 //+------------------------------------------------------------------+
-void NN_TrainOnTradeOutcome(double inputs[], double profit)
+void NN_TrainOnTradeOutcome(const double &inputs[], double profit)
 {
    if(!UseNeuralNetwork) return;
    

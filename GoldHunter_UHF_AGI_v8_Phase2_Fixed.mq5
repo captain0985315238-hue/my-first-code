@@ -10,10 +10,16 @@
 //|  [CORE] PipelineTrace logging — mechanistic interpretability chain  |
 //|  [CORE] Safety Layer gates — pre-check and post-check architecture  |
 //|  [ARCH] Decomposed OnTick() — six named pipeline functions          |
+//|  [PHASE2] Two-tier memory system (working/episodic)                 |
+//|  [PHASE2] TradeRecordV8 CSV logging                                 |
+//|  [PHASE2] Q-table state encoder                                     |
+//|  [PHASE2] Beta-Bernoulli Bayesian updates                           |
+//|  [PHASE3] 5 Specialist Agents with VETO system                      |
+//|  [PHASE3] 5-Node Order Execution DAG                                |
 //+------------------------------------------------------------------+
-#property copyright "GoldHunter UHF AGI v8.0 — XM Global Ultimate Edition"
-#property version   "8.00"
-#property description "UHF Gold EA | XAUUSD | 1-Second Execution | AGI OODA Loop"
+#property copyright "GoldHunter UHF AGI v8.0 Phase3 — XM Global Ultimate Edition"
+#property version   "8.30"
+#property description "UHF Gold EA | XAUUSD | 1-Second Execution | AGI OODA Loop | Phase 3"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -329,6 +335,15 @@ struct QTableEntry {
    datetime lastUpdate;
 };
 
+// PHASE 3: Specialist Agent Voting System
+struct AgentVote {
+   int    direction;        // +1=Buy, -1=Sell, 0=Neutral
+   double confidence;       // 0.0 to 1.0
+   double weight;           // agent's vote weight (dynamic)
+   string reasons;          // pipe-delimited evidence string
+   bool   isVeto;           // if true, BLOCKS trade regardless of others
+};
+
 struct BayesianStrategyProb {
    double scalpProb;
    double swingProb;
@@ -343,6 +358,15 @@ struct NeuralNetworkLayer {
    double hiddenBias[15];
    double outputWeights[15];
    double outputBias;
+};
+
+// PHASE 3: Order Execution DAG Node Results
+struct DAGNodeResult {
+   bool   passed;
+   string nodeType;
+   string details;
+   uint   retcode;
+   datetime timestamp;
 };
 
 // [v7] Tick type constants for order flow analysis
@@ -398,6 +422,11 @@ NeuralNetworkLayer nnLayer;
 TickDeltaBuffer tickDelta;
 CorrelationGuard corrGuard;
 SelfHealOptimizer optimizer;
+
+// PHASE 3: Order Execution DAG state
+DAGNodeResult dagResults[5];  // Results from each DAG node
+int dagFailedAttempts = 0;    // Consecutive DAG failures for alerting
+datetime lastDagFailureTime = 0;
 
 // PHASE 2 UPGRADE: Session working memory (Tier 1)
 // NOTE: AgentContext must be defined first before use

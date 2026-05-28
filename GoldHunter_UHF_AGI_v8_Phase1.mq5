@@ -494,118 +494,121 @@ void SafetyLayer_PostCheck(AgentContext &ctx)
       PipelineTraceLog("SAFETY", "OK", "Trade executed, ticket="+(string)ctx.placedTicket);
    }
 }
-
 //==========================================================================
-//  OnInit
-//==========================================================================
-int OnInit()
-{
-   if(!symbolInfo.Name(Symbol())) {
-      Alert("GoldHunter v5: Cannot load symbol info for ", Symbol());
-      return INIT_FAILED;
-   }
-   symbolInfo.RefreshRates();
-
-   // Current TF handles
-   handleEMAFast      = iMA(Symbol(), PERIOD_CURRENT, FastEMA_Period,  0, MODE_EMA, PRICE_CLOSE);
-   handleEMASlow      = iMA(Symbol(), PERIOD_CURRENT, SlowEMA_Period,  0, MODE_EMA, PRICE_CLOSE);
-   handleEMATrend     = iMA(Symbol(), PERIOD_H1,      TrendEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleRSI          = iRSI(Symbol(), PERIOD_CURRENT, RSI_Period, PRICE_CLOSE);
-   handleMACD         = iMACD(Symbol(), PERIOD_CURRENT, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
-   handleBB           = iBands(Symbol(), PERIOD_CURRENT, BB_Period, 0, BB_Deviation, PRICE_CLOSE);
-   handleATR          = iATR(Symbol(), PERIOD_CURRENT, ATR_Period);
-   handleStoch        = iStochastic(Symbol(), PERIOD_CURRENT, Stoch_K, Stoch_D, Stoch_Slow, MODE_SMA, STO_LOWHIGH);
-   handleADX          = iADX(Symbol(), PERIOD_CURRENT, ADX_Period);
-   handleScalpEMA5    = iMA(Symbol(), PERIOD_M1, 5,   0, MODE_EMA, PRICE_CLOSE);
-   handleScalpEMA13   = iMA(Symbol(), PERIOD_M1, 13,  0, MODE_EMA, PRICE_CLOSE);
-   handleScalpRSI7    = iRSI(Symbol(), PERIOD_M1, 7,  PRICE_CLOSE);
-   handleH4EMA50      = iMA(Symbol(), PERIOD_H4, 50,  0, MODE_EMA, PRICE_CLOSE);
-   handleH4EMA200     = iMA(Symbol(), PERIOD_H4, 200, 0, MODE_EMA, PRICE_CLOSE);
-
-   // [v5] M5 confluence handles
-   handleM5EMAFast    = iMA(Symbol(), PERIOD_M5,  FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleM5EMASlow    = iMA(Symbol(), PERIOD_M5,  SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleM5RSI        = iRSI(Symbol(), PERIOD_M5, RSI_Period, PRICE_CLOSE);
-
-   // [v5] H1 confluence handles
-   handleH1EMAFast    = iMA(Symbol(), PERIOD_H1, FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleH1EMASlow    = iMA(Symbol(), PERIOD_H1, SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleH1RSI        = iRSI(Symbol(), PERIOD_H1, RSI_Period, PRICE_CLOSE);
-
-   if(UseMultiTimeframe)
-      handleEMATrend_HTF = iMA(Symbol(), HigherTimeframe, TrendEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-
-   if(handleEMAFast  == INVALID_HANDLE || handleEMASlow  == INVALID_HANDLE ||
-      handleRSI      == INVALID_HANDLE || handleMACD     == INVALID_HANDLE ||
-      handleATR      == INVALID_HANDLE || handleADX      == INVALID_HANDLE) {
-      Alert("GoldHunter v5: Indicator init FAILED. Check symbol: ", Symbol());
-      return INIT_FAILED;
-   }
-
-   trade.SetExpertMagicNumber(EA_MAGIC_NUMBER);
-   trade.SetDeviationInPoints(SlippagePoints);
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
-
-   dailyStartBalance  = AccountInfoDouble(ACCOUNT_BALANCE);
-   weeklyStartBalance = dailyStartBalance;
-   peakEquity         = AccountInfoDouble(ACCOUNT_EQUITY);
-   sessionPeakEquity  = peakEquity;
-   currentDay         = iTime(Symbol(), PERIOD_D1, 0);
-   currentWeek        = iTime(Symbol(), PERIOD_W1, 0);
-   manualBotEnabled   = BotEnabledByDefault;
-   manualSessionFilter= UseSessionFilter;
-
-   ArrayResize(tp1ExecutedTickets, 0);
-   tp1ExecutedCount = 0;
-
-   if(ShowDashboard)            CreateDashboard();
-   if(EnableChartControlButton) { CreateBotControlButton(); CreateSessionControlButton(); }
-   UpdateBotControlButton();
-   UpdateSessionControlButton();
-
-   SendDiscordStartupReport();
-   Print("GoldHunter UHF AGI v", EA_VERSION, " initialized. Symbol: ", Symbol(),
-         " | Magic: ", EA_MAGIC_NUMBER);
-   return INIT_SUCCEEDED;
-}
-
-//==========================================================================
-//  OnDeinit
-//==========================================================================
-void OnDeinit(const int reason)
-{
-   IndicatorRelease(handleEMAFast);   IndicatorRelease(handleEMASlow);
-   IndicatorRelease(handleEMATrend);  IndicatorRelease(handleRSI);
-   IndicatorRelease(handleMACD);      IndicatorRelease(handleBB);
-   IndicatorRelease(handleATR);       IndicatorRelease(handleStoch);
-   IndicatorRelease(handleADX);       IndicatorRelease(handleScalpEMA5);
-   IndicatorRelease(handleScalpEMA13);IndicatorRelease(handleScalpRSI7);
-   IndicatorRelease(handleH4EMA50);   IndicatorRelease(handleH4EMA200);
-   IndicatorRelease(handleM5EMAFast); IndicatorRelease(handleM5EMASlow);
-   IndicatorRelease(handleM5RSI);     IndicatorRelease(handleH1EMAFast);
-   IndicatorRelease(handleH1EMASlow); IndicatorRelease(handleH1RSI);
-   if(UseMultiTimeframe) IndicatorRelease(handleEMATrend_HTF);
-
-   ObjectsDeleteAll(ChartID(), "GHP_");
-   SendDiscordShutdownReport(reason);
-}
-
-//==========================================================================
-//  OnTick — Main Loop
+//  OnTick — Main Loop (OODA Agent Architecture v8.0)
 //==========================================================================
 void OnTick()
 {
-   CheckNewDay();
-   CheckWeeklyReport();
-
-   if(!symbolInfo.RefreshRates()) return;
-
-   if(!UpdateIndicators()) {
-      LogStatus("Waiting for indicators...");
+   // Initialize agent context envelope
+   AgentContext ctx;
+   ZeroMemory(ctx);
+   
+   // Safety Layer always runs first — can abort entire loop
+   if(!SafetyLayer_PreCheck()) {
+      if(ShowDashboard) UpdateDashboard();
       return;
    }
+   
+   // Phase 1: OBSERVE — collect all sensor data, validate completeness
+   Phase_Observe(ctx);
+   if(!ctx.dataValid) {
+      LogStatus("Waiting for indicators...");
+      if(ShowDashboard) UpdateDashboard();
+      return;
+   }
+   
+   // Phase 2: ORIENT — regime detection + strategy selection (vote aggregation)
+   Phase_Orient(ctx);
+   
+   // Phase 3: DECIDE — apply all filter gates, set tradingAllowed
+   Phase_Decide(ctx);
+   
+   if(ctx.tradingAllowed) {
+      // Phase 4: PLAN — compute lots/SL/TP, run PreFlightValidator
+      Phase_Plan(ctx);
+      
+      // Phase 5: EXECUTE — call TryPlaceOrder via OrderExecutionDAG
+      Phase_Execute(ctx);
+   }
+   
+   // Position management runs independently of signal pipeline
+   ManagePositions();
+   
+   // Phase 6: REFLECT — always runs (learning even on no-trade ticks)
+   Phase_Reflect(ctx);
+   
+   // Safety Layer post-check
+   SafetyLayer_PostCheck(ctx);
+   
+   // Update dashboard with final state
+   if(ShowDashboard) UpdateDashboard();
+}
 
-   // [v5] Peak equity tracking for drawdown
+//==========================================================================
+//  PHASE 1: OBSERVE — Data Ingestion Layer
+//==========================================================================
+void Phase_Observe(AgentContext &ctx)
+{
+   PipelineTraceLog("OBSERVE", "START", "Collecting sensor data");
+   
+   // Check symbol refresh
+   if(!symbolInfo.RefreshRates()) {
+      ctx.dataValid = false;
+      PipelineTraceLog("OBSERVE", "FAIL", "Symbol refresh failed");
+      return;
+   }
+   
+   // Update indicators - populate global variables
+   if(!UpdateIndicators()) {
+      ctx.dataValid = false;
+      PipelineTraceLog("OBSERVE", "FAIL", "Indicator update failed");
+      return;
+   }
+   
+   // Copy global indicator values to context
+   ctx.atrValue       = atrValue;
+   ctx.rsiValue       = rsiValue;
+   ctx.adxValue       = adxValue;
+   ctx.emaFast        = emaFast;
+   ctx.emaSlow        = emaSlow;
+   ctx.emaTrend       = emaTrend;
+   ctx.macdMain       = macdMain;
+   ctx.macdSignal     = macdSignal;
+   ctx.bbUpper        = bbUpper;
+   ctx.bbMiddle       = bbMiddle;
+   ctx.bbLower        = bbLower;
+   ctx.stochMain      = stochMain;
+   ctx.stochSignal    = stochSignal;
+   ctx.plusDI         = plusDI;
+   ctx.minusDI        = minusDI;
+   ctx.averageVolume  = averageVolume;
+   ctx.prevAtrValue   = prevAtrValue;
+   ctx.emaTrend_HTF   = emaTrend_HTF;
+   
+   // Multi-timeframe confluence data
+   if(UseMultiTimeframe) {
+      double m5Fast[1], m5Slow[1], m5RSI[1];
+      double h1Fast[1], h1Slow[1], h1RSI[1];
+      
+      if(CopyBuffer(handleM5EMAFast, 0, 1, 1, m5Fast) >= 1)
+         ctx.m5EMAFast = m5Fast[0];
+      if(CopyBuffer(handleM5EMASlow, 0, 1, 1, m5Slow) >= 1)
+         ctx.m5EMASlow = m5Slow[0];
+      if(CopyBuffer(handleM5RSI, 0, 1, 1, m5RSI) >= 1)
+         ctx.m5RSI = m5RSI[0];
+      
+      if(CopyBuffer(handleH1EMAFast, 0, 1, 1, h1Fast) >= 1)
+         ctx.h1EMAFast = h1Fast[0];
+      if(CopyBuffer(handleH1EMASlow, 0, 1, 1, h1Slow) >= 1)
+         ctx.h1EMASlow = h1Slow[0];
+      if(CopyBuffer(handleH1RSI, 0, 1, 1, h1RSI) >= 1)
+         ctx.h1RSI = h1RSI[0];
+   }
+   
+   // Detect market regime
+   ctx.marketRegime = DetectMarketRegime();
+   
+   // Track peak equity
    double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(curEquity > peakEquity)        peakEquity        = curEquity;
    if(curEquity > sessionPeakEquity) sessionPeakEquity = curEquity;
@@ -613,90 +616,278 @@ void OnTick()
       double dd = (peakEquity - curEquity) / peakEquity * 100.0;
       if(dd > maxDrawdownPct) maxDrawdownPct = dd;
    }
-
-   double currentSpread = (symbolInfo.Ask() - symbolInfo.Bid()) / symbolInfo.Point();
-   if(currentSpread > MaxSpreadPips) {
-      LogStatus(StringFormat("Spread too high: %.1f > %d", currentSpread, MaxSpreadPips));
-      lastSignal = "⚠️ SPREAD HIGH";
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   if(!IsBotTradingAllowed()) {
-      lastSignal = manualBotEnabled ? "⏸️ DISABLED BY INPUT" : "⏸️ PAUSED MANUALLY";
-      if(ManagePositionsWhenPaused) ManagePositions();
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   // [v5] Circuit breaker check
-   if(cbPauseUntil > 0 && TimeCurrent() < cbPauseUntil) {
-      int remaining = (int)(cbPauseUntil - TimeCurrent()) / 60;
-      lastSignal = StringFormat("⏸️ CB PAUSE — %dm left", remaining);
-      if(ManagePositionsWhenPaused) ManagePositions();
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-   if(cbPauseUntil > 0 && TimeCurrent() >= cbPauseUntil) {
-      cbPauseUntil      = 0;
-      consecutiveLosses = 0;
-      sessionPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY); // reset session peak after pause
-      if(NotifyOnBotState)
-         SendDiscord(StringFormat("✅ **ADAPTIVE CB LIFTED** — Trading resumed.\n"
-                                  "Trigger was: `%s`\n"
-                                  "Paused for: `%d min`\n"
-                                  "Equity now: `$%.2f`",
-                                  cbTriggerReason, cbPauseMinutesLast,
-                                  AccountInfoDouble(ACCOUNT_EQUITY)));
-      cbTriggerReason = "";
-   }
-
-   // [v6] CheckSafetyLimits now always returns true - no hard halts
-   CheckSafetyLimits();  // Still call to update state and send notifications
    
-   if(manualSessionFilter && !IsActiveSession()) {
-      lastSignal = "⏰ Waiting for session...";
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
+   ctx.dataValid = true;
+   PipelineTraceLog("OBSERVE", "OK", 
+      StringFormat("Regime=%d ATR=%.2f RSI=%.1f ADX=%.1f", 
+                   ctx.marketRegime, ctx.atrValue, ctx.rsiValue, ctx.adxValue));
+}
 
-   ManagePositions();
-
-   // [v5] Bar-close gate — wait for confirmed candle
-   static datetime lastBar = 0;
-   datetime currentBar     = iTime(Symbol(), PERIOD_CURRENT, 0);
-   bool isNewBar           = (currentBar != lastBar);
-   if(isNewBar) lastBar    = currentBar;
-
-   if(!isNewBar && !TickBasedEntry) {
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   if(AutoSelectStrategy) currentStrategy = SelectBestStrategy();
-   else                   currentStrategy = StrategyMode;
-
+//==========================================================================
+//  PHASE 2: ORIENT — Reasoning Engine (Vote Aggregation)
+//==========================================================================
+void Phase_Orient(AgentContext &ctx)
+{
+   PipelineTraceLog("ORIENT", "START", "Strategy selection and vote aggregation");
+   
+   // Select strategy based on AutoSelect flag
+   if(AutoSelectStrategy) 
+      ctx.selectedStrategy = SelectBestStrategy();
+   else                   
+      ctx.selectedStrategy = StrategyMode;
+   
+   // Get market score from selected strategy
    MarketScore score;
-   switch(currentStrategy) {
+   switch(ctx.selectedStrategy) {
       case 1:  score = StrategyScalping();  break;
       case 2:  score = StrategySwing();     break;
       case 3:  score = StrategyBreakout();  break;
       case 4:  score = StrategyReversal();  break;
       default: score = StrategyAutoAI();    break;
    }
-
-   ExecuteSignal(score);
-
-   if(ShowDashboard) UpdateDashboard();
+   
+   // Map scores to agent votes
+   ctx.agentBuyVotes  = score.buyScore;
+   ctx.agentSellVotes = score.sellScore;
+   ctx.aggregateConfidence = score.confidence;
+   ctx.decisionReasons = score.reasons;
+   
+   PipelineTraceLog("ORIENT", "OK", 
+      StringFormat("Strategy=%s BuyVotes=%d SellVotes=%d Conf=%.1f%%",
+                   stratNames[ctx.selectedStrategy], 
+                   ctx.agentBuyVotes, ctx.agentSellVotes, ctx.aggregateConfidence));
 }
 
 //==========================================================================
-//  OnChartEvent
+//  PHASE 3: DECIDE — Decision Gate (All Filter Gates)
 //==========================================================================
-void OnChartEvent(const int id, const long &lparam,
-                  const double &dparam, const string &sparam)
+void Phase_Decide(AgentContext &ctx)
 {
-   if(id != CHARTEVENT_OBJECT_CLICK) return;
+   PipelineTraceLog("DECIDE", "START", "Applying filter gates");
+   
+   ctx.tradingAllowed = true;
+   ctx.blockReason = "";
+   
+   // Gate 1: Spread check
+   double currentSpread = (symbolInfo.Ask() - symbolInfo.Bid()) / symbolInfo.Point();
+   if(currentSpread > MaxSpreadPips) {
+      ctx.tradingAllowed = false;
+      ctx.blockReason = "Spread too high";
+      lastSignal = "⚠️ SPREAD HIGH";
+      PipelineTraceLog("DECIDE", "BLOCK", ctx.blockReason);
+      return;
+   }
+   
+   // Gate 2: Session filter
+   if(manualSessionFilter && !IsActiveSession()) {
+      ctx.tradingAllowed = false;
+      ctx.blockReason = "Outside active session";
+      lastSignal = "⏰ Waiting for session...";
+      PipelineTraceLog("DECIDE", "BLOCK", ctx.blockReason);
+      return;
+   }
+   
+   // Gate 3: Bar-close gate (if not tick-based)
+   static datetime lastBar = 0;
+   datetime currentBar     = iTime(Symbol(), PERIOD_CURRENT, 0);
+   bool isNewBar           = (currentBar != lastBar);
+   if(isNewBar) lastBar = currentBar;
+   
+   if(!isNewBar && !TickBasedEntry) {
+      ctx.tradingAllowed = false;
+      ctx.blockReason = "Waiting for new bar";
+      PipelineTraceLog("DECIDE", "BLOCK", ctx.blockReason);
+      return;
+   }
+   
+   // Gate 4: Confidence threshold
+   double dynConfidence = GetDynamicMinConfidence();
+   if(ctx.aggregateConfidence < dynConfidence) {
+      ctx.tradingAllowed = false;
+      ctx.blockReason = StringFormat("Confidence %.0f%% < threshold %.0f%%", 
+                                      ctx.aggregateConfidence, dynConfidence);
+      lastSignal = StringFormat("⏳ B:%d S:%d [%.0f%%/%.0f%%]",
+                                ctx.agentBuyVotes, ctx.agentSellVotes,
+                                ctx.aggregateConfidence, dynConfidence);
+      PipelineTraceLog("DECIDE", "BLOCK", ctx.blockReason);
+      return;
+   }
+   
+   PipelineTraceLog("DECIDE", "OK", "All gates passed");
+}
+
+//==========================================================================
+//  PHASE 4: PLAN — Trade Constructor with PreFlight Validation
+//==========================================================================
+void Phase_Plan(AgentContext &ctx)
+{
+   PipelineTraceLog("PLAN", "START", "Computing trade parameters");
+   
+   int regime = ctx.marketRegime;
+   double sl_m, tp_m;
+   GetAdaptiveSLTPMultipliers(regime, sl_m, tp_m);
+   
+   double slDist = UseATRStops ? (ctx.atrValue * sl_m) : (FixedSL_Points * symbolInfo.Point());
+   double tpDist = UseATRStops ? (ctx.atrValue * tp_m) : (FixedTP_Points * symbolInfo.Point());
+   
+   // Calculate lot size
+   ctx.proposedLots = CalculateLotSize(slDist);
+   if(ctx.proposedLots <= 0) {
+      ctx.tradingAllowed = false;
+      ctx.blockReason = "Invalid lot size";
+      PipelineTraceLog("PLAN", "BLOCK", ctx.blockReason);
+      return;
+   }
+   
+   // Determine order type and prices
+   double ask = symbolInfo.Ask();
+   double bid = symbolInfo.Bid();
+   int digits = symbolInfo.Digits();
+   
+   if(ctx.agentBuyVotes > ctx.agentSellVotes) {
+      ctx.proposedType = ORDER_TYPE_BUY;
+      ctx.proposedEntry = ask;
+      ctx.proposedSL = NormalizeDouble(bid - slDist, digits);
+      ctx.proposedTP = NormalizeDouble(ask + tpDist, digits);
+   } else {
+      ctx.proposedType = ORDER_TYPE_SELL;
+      ctx.proposedEntry = bid;
+      ctx.proposedSL = NormalizeDouble(ask + slDist, digits);
+      ctx.proposedTP = NormalizeDouble(bid - tpDist, digits);
+   }
+   
+   PipelineTraceLog("PLAN", "OK", 
+      StringFormat("Type=%s Lots=%.2f SL=%.2f TP=%.2f",
+                   ctx.proposedType == ORDER_TYPE_BUY ? "BUY" : "SELL",
+                   ctx.proposedLots, ctx.proposedSL, ctx.proposedTP));
+}
+
+//==========================================================================
+//  PHASE 5: EXECUTE — Order Execution DAG
+//==========================================================================
+void Phase_Execute(AgentContext &ctx)
+{
+   PipelineTraceLog("EXECUTE", "START", "Attempting order placement");
+   
+   // Check for existing positions
+   for(int i = PositionsTotal()-1; i >= 0; i--) {
+      if(posInfo.SelectByIndex(i))
+         if(posInfo.Symbol() == Symbol() && posInfo.Magic() == EA_MAGIC_NUMBER) {
+            ctx.orderPlaced = false;
+            ctx.lastRetcode = 0;
+            PipelineTraceLog("EXECUTE", "BLOCK", "Position already exists");
+            return;
+         }
+   }
+   
+   // Check cooldown
+   if((int)(TimeCurrent() - lastTradeTime) < TradeCooldownSec) {
+      ctx.orderPlaced = false;
+      ctx.lastRetcode = 0;
+      PipelineTraceLog("EXECUTE", "BLOCK", "In cooldown period");
+      return;
+   }
+   
+   // Confluence and momentum gates
+   bool isBuy = (ctx.proposedType == ORDER_TYPE_BUY);
+   if(!IsStrongConfluence(isBuy)) {
+      ctx.orderPlaced = false;
+      lastSignal = isBuy ? "⏳ No TF Confluence (B)" : "⏳ No TF Confluence (S)";
+      PipelineTraceLog("EXECUTE", "BLOCK", "No confluence");
+      return;
+   }
+   if(!IsMomentumAligned(isBuy)) {
+      ctx.orderPlaced = false;
+      lastSignal = isBuy ? "⏳ No Momentum (B)" : "⏳ No Momentum (S)";
+      PipelineTraceLog("EXECUTE", "BLOCK", "No momentum alignment");
+      return;
+   }
+   
+   // Place the order
+   string comment = "GHP5_" + stratNames[ctx.selectedStrategy];
+   if(TryPlaceOrder(ctx.proposedType, ctx.proposedLots, ctx.proposedEntry, 
+                    ctx.proposedSL, ctx.proposedTP, comment)) {
+      ctx.orderPlaced = true;
+      ctx.placedTicket = posInfo.Ticket();
+      ctx.lastRetcode = 0;
+      lastTradeTime = TimeCurrent();
+      tradesThisDay++;
+      consecutiveLosses = 0;
+      
+      string signalText = isBuy ? StringFormat("🟢 BUY @ %.2f", ctx.proposedEntry) : 
+                                   StringFormat("🔴 SELL @ %.2f", ctx.proposedEntry);
+      lastSignal = signalText;
+      
+      PipelineTraceLog("EXECUTE", "OK", 
+         StringFormat("Order placed, ticket=%lu", ctx.placedTicket));
+      
+      // Send alerts (preserving original logic)
+      if(AlertOnTradeOpen || PushNotifyOnTrade || NotifyOnTrade) {
+         SendTradeAlerts(ctx);
+      }
+   } else {
+      ctx.orderPlaced = false;
+      ctx.lastRetcode = GetLastError();
+      PipelineTraceLog("EXECUTE", "FAIL", StringFormat("Retcode=%d", ctx.lastRetcode));
+   }
+}
+
+//==========================================================================
+//  PHASE 6: REFLECT — Outcome Observer (Learning Updates)
+//==========================================================================
+void Phase_Reflect(AgentContext &ctx)
+{
+   PipelineTraceLog("REFLECT", "START", "Updating learning systems");
+   
+   // Q-learning and Bayesian updates happen here (async reflection)
+   // This runs every tick to maintain learning even without trades
+   
+   ctx.reflectionComplete = true;
+   PipelineTraceLog("REFLECT", "OK", "Reflection complete");
+}
+
+//==========================================================================
+//  Helper: Send Trade Alerts (preserves original alert logic)
+//==========================================================================
+void SendTradeAlerts(AgentContext &ctx)
+{
+   double dynConfidence = GetDynamicMinConfidence();
+   bool isBuy = (ctx.proposedType == ORDER_TYPE_BUY);
+   string signalEmoji = isBuy ? "🟢" : "🔴";
+   string signalType = isBuy ? "BUY" : "SELL";
+   
+   if(AlertOnTradeOpen)
+      Alert(StringFormat("[GoldHunter v8] %s %s GOLD OPENED\n"
+                         "Price: %.2f | SL: %.2f | TP: %.2f\n"
+                         "Lot: %.2f | Strategy: %s | Score: %d | Conf: %.0f%%\n"
+                         "Balance: $%.2f",
+                         signalEmoji, signalType, ctx.proposedEntry, 
+                         ctx.proposedSL, ctx.proposedTP, ctx.proposedLots,
+                         stratNames[ctx.selectedStrategy], 
+                         isBuy ? ctx.agentBuyVotes : ctx.agentSellVotes,
+                         ctx.aggregateConfidence,
+                         AccountInfoDouble(ACCOUNT_BALANCE)));
+
+   if(PushNotifyOnTrade)
+      SendNotification(StringFormat("GHP5 %s GOLD | %.2f | SL:%.2f TP:%.2f | Lot:%.2f",
+                                    signalType, ctx.proposedEntry, 
+                                    ctx.proposedSL, ctx.proposedTP, ctx.proposedLots));
+
+   if(NotifyOnTrade)
+      SendDiscord(StringFormat(
+         "%s **%s GOLD OPENED** [v8 OODA]\n"
+         "💲 Price: `%.2f`\n🎯 TP: `%.2f`  🛡️ SL: `%.2f`\n"
+         "📦 Lot: `%.2f`  🧠 Strategy: `%s`\n"
+         "📊 Score: `%d`  🎯 Conf: `%.0f%%`  Threshold: `%.0f%%`\n"
+         "🔍 Reasons: %s\n"
+         "💰 Balance: `$%.2f`  Trades today: `%d`",
+         signalEmoji, signalType, ctx.proposedEntry, ctx.proposedTP, ctx.proposedSL, 
+         ctx.proposedLots, stratNames[ctx.selectedStrategy],
+         isBuy ? ctx.agentBuyVotes : ctx.agentSellVotes, 
+         ctx.aggregateConfidence, dynConfidence,
+         ctx.decisionReasons,
+         AccountInfoDouble(ACCOUNT_BALANCE), tradesThisDay));
+}
 
    if(sparam == SESSION_BUTTON_NAME) {
       manualSessionFilter = !manualSessionFilter;

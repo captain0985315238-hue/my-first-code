@@ -1,52 +1,47 @@
 ```
-# Compiled and build artifacts
-*.pyc
-__pycache__/
-*.o
+# Compiled and binary files
+*.mq5.ex5
+*.mq5.gsc
+*.mq5.hst
+*.mq5.fxt
+*.ex4
+*.gsc
+*.hst
+*.fxt
+
+# Build artifacts
 *.obj
-*.class
-*.exe
-*.dll
-*.so
-*.a
+*.o
 *.out
 
-# Dependencies
-node_modules/
-venv/
-.venv/
-.env
-.env.local
-.env.*
+# Dependencies and packages
+lib/
+include/
 
-# Logs and temp files
+# Logs and temporary files
 *.log
 *.tmp
+*.temp
+
+# Editor/IDE files
+.vscode/
+.idea/
 *.swp
 *.swo
 
-# Editors
-.vscode/
-.idea/
+# Environment files
+.env
+.env.local
+*.env.*
 
-# System files
-.DS_Store
-Thumbs.db
-
-# Coverage
+# Coverage and test reports
 coverage/
 htmlcov/
-.coverage
+*.coverage
 
-# Build directories
-dist/
-build/
-target/
-.gradle/
-
-# Python caches
-.mypy_cache/
-.pytest_cache/
+# OS specific
+.DS_Store
+Thumbs.db
 
 # Compressed files
 *.zip

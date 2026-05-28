@@ -1,3 +1,31 @@
-Nothing should be ignored in this case, as the only added file is a source code file (.mq5) which is the main project file for MetaQuotes Language 5 used in MetaTrader 5 trading platform development.
+```
+# Compiled files
+*.mq5o
+*.ex5
+*.mqh
 
-(empty output)
+# Build artifacts
+*.dll
+*.so
+*.lib
+*.obj
+
+# Dependencies
+MQL5/Libraries/
+MQL5/Include/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+```

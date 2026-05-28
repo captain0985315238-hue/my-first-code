@@ -1,3793 +1,2591 @@
 //+------------------------------------------------------------------+
-//|         GOLDHUNTER ULTIMATE v8.3 UHF AGI — PHASE 3 EDITION            |
-//|    Ultra-High-Frequency AGI Trading Bot for XAUUSD (Gold) Scalp/Swing    |
-//|    Standard: MetaEditor 5 / XM Global MT5 Servers    |
-//|    Build Target: MT5 4000+ | Tested: XAUUSD M1/M5/M15/H1        |
-//|    PHASE 3: 5 Specialist Agents + VETO System + 5-Node DAG Execution   |
+//|                                      GoldHunter_UHF_AGI_v8_Phase3_Complete.mq5 |
+//|                        Expert Advisor: Agentic AI Architecture Phase 3 |
+//|                        Features: OODA Loop, 2-Tier Memory, Q-Learning, |
+//|                                  Bayesian Updates, 5-Agent VETO, 5-Node DAG |
 //+------------------------------------------------------------------+
-//| UPGRADE LOG v8.3 AGI Phase 3 (from v8.0):                           |
-//|  [PH3] 5 Specialist Agents — Trend, Momentum, MeanRev, Volatility, Sentiment |
-//|  [PH3] VETO System — Critical agents can block trades unilaterally |
-//|  [PH3] 5-Node Order Execution DAG — Validation→RiskCheck→PreFlight→Submission→Confirmation |
-//|  [PH3] Fail-Fast Architecture — Stop execution on first node failure |
-//|  [PH2] Two-Tier Memory — Working Memory (ring buffer) + Episodic Memory (CSV) |
-//|  [PH2] TradeRecordV8 — Enhanced trade logging with AI metadata |
-//|  [PH2] Q-Table State Encoder — 360-state discrete encoding |
-//|  [PH2] Beta-Bernoulli Bayesian Updates — Conjugate prior learning |
-//|  [PH1] OODA Agent Loop — formal Observe-Orient-Decide-Act pipeline |
-//|  [PH1] AgentContext envelope — typed message passing between phases |
-//|  [PH1] PipelineTrace logging — mechanistic interpretability chain  |
-//|  [PH1] Safety Layer gates — pre-check and post-check architecture  |
-//|  [ARCH] Decomposed OnTick() — six named pipeline functions          |
-//+------------------------------------------------------------------+
-#property copyright "GoldHunter UHF AGI v8.3 — Phase 3 Edition"
+#property copyright "GoldHunter AGI Team"
+#property link      "https://goldhunter.ai"
 #property version   "8.03"
-#property description "UHF Gold EA | XAUUSD | 1-Second Execution | AGI OODA + 5-Agent VETO + DAG"
 #property strict
 
+//--- Includes
 #include <Trade\Trade.mqh>
-#include <Trade\SymbolInfo.mqh>
 #include <Trade\PositionInfo.mqh>
+#include <Trade\OrderInfo.mqh>
+#include <Trade\AccountInfo.mqh>
+#include <Trade\SymbolInfo.mqh>
+#include <Arrays\ArrayObj.mqh>
+#include <Arrays\ArrayInt.mqh>
+#include <Arrays\ArrayDouble.mqh>
+#include <Arrays\ArrayString.mqh>
 
-//--- Forward declarations
-void     LogStatus(string message);
-void     CreateSessionControlButton();
-void     UpdateSessionControlButton();
-void     CreateBotControlButton();
-void     UpdateBotControlButton();
-void     SendPnLAlert(string action, double grossProfit, double netProfit,
-                      double balance, string sym, ulong posId, double lots);
-string   RetcodeToString(uint retcode);
-bool     TryPlaceOrder(ENUM_ORDER_TYPE type, double lots, double price,
-                       double sl, double tp, string comment);
-bool     IsStrongConfluence(bool isBuy);
-bool     IsMomentumAligned(bool isBuy);
-bool     IsMarketStructureBull();
-bool     IsMarketStructureBear();
-void     SendDiscordExtendedReport();
-void     CheckConsecutiveLossCB();
+//--- Input parameters
+input group "=== AGENT CONTEXT PARAMETERS ==="
+input double    INITIAL_CAPITAL = 10000.0;        // Initial capital
+input double    RISK_PER_TRADE = 0.02;           // Risk per trade (2%)
+input int       MAX_OPEN_POSITIONS = 5;          // Maximum open positions
+input double    STOP_LOSS_PIPS = 50.0;           // Stop loss in pips
+input double    TAKE_PROFIT_PIPS = 100.0;        // Take profit in pips
+input int       MEMORY_SIZE = 1000;              // Working memory size
+input int       EPISODIC_MEMORY_DAYS = 30;       // Days to keep episodic memory
 
-CTrade         trade;
-CSymbolInfo    symbolInfo;
-CPositionInfo  posInfo;
+input group "=== UHF AGENT PARAMETERS ==="
+input bool      ENABLE_TREND_AGENT = true;       // Enable trend following agent
+input bool      ENABLE_MOMENTUM_AGENT = true;    // Enable momentum agent
+input bool      ENABLE_MEAN_REVERSION_AGENT = true; // Enable mean reversion agent
+input bool      ENABLE_VOLATILITY_AGENT = true;  // Enable volatility agent
+input bool      ENABLE_SENTIMENT_AGENT = true;   // Enable sentiment agent
+input double    AGENT_CONFIDENCE_THRESHOLD = 0.6; // Minimum confidence for action
 
-//==========================================================================
-//  INPUT PARAMETERS
-//==========================================================================
+input group "=== Q-TABLE PARAMETERS ==="
+input int       QTABLE_STATES = 360;             // Number of discrete states
+input double    LEARNING_RATE = 0.1;             // Alpha learning rate
+input double    DISCOUNT_FACTOR = 0.9;           // Gamma discount factor
+input double    EPSILON = 0.1;                   // Epsilon for exploration
 
-input group "=== STRATEGY MODE ==="
-input int    StrategyMode        = 0;    // 0=Auto(AI) 1=Scalp 2=Swing 3=Breakout 4=Reversal
-input bool   AutoSelectStrategy  = true;
+input group "=== MEMORY SYSTEM PARAMETERS ==="
+input int       WORKING_MEMORY_SIZE = 1000;      // Size of working memory ring buffer
+input string    EPISODIC_MEMORY_FILE = "episodic_memory.csv"; // Episodic memory file
+input int       EPISODIC_MEMORY_RETENTION = 30;  // Days to retain episodic memory
 
-input group "=== RISK MANAGEMENT ==="
-input double RiskPercent         = 1.5;  // Risk per trade (% of balance) — reduced for accuracy
-input bool   UseAggressiveGrowth = true;
-input double GrowthMultiplier    = 1.2;
-input double MaxDailyLossPerc    = 20.0;  // [v6] Dynamic: % of equity, not hard halt
-input double MaxDailyProfitPerc  = 30.0;  // [v6] Dynamic: % of equity, not hard halt
-input int    MaxTradesPerDay     = 20;   // [v5] Stats tracking only — NOT a hard block
-input double MinLot              = 0.01;
-input double MaxLot              = 1.0;
+input group "=== EXECUTION DAG PARAMETERS ==="
+input bool      ENABLE_EXECUTION_DAG = true;     // Enable execution DAG
+input int       VALIDATION_TIMEOUT = 5000;       // Validation timeout in ms
+input int       RISK_CHECK_TIMEOUT = 3000;       // Risk check timeout in ms
+input int       PRE_FLIGHT_TIMEOUT = 2000;       // Pre-flight timeout in ms
+input int       SUBMISSION_TIMEOUT = 10000;      // Submission timeout in ms
+input int       CONFIRMATION_TIMEOUT = 5000;     // Confirmation timeout in ms
 
-input group "=== STOP LOSS / TAKE PROFIT ==="
-input bool   UseATRStops         = true;
-input double ATR_SL_Multiplier   = 1.5;
-input double ATR_TP_Multiplier   = 3.0;  // [v5] wider TP for better R:R
-input int    FixedSL_Points      = 150;
-input int    FixedTP_Points      = 400;
-input bool   UseTrailingStop     = true;
-input double TrailATRMultiplier  = 1.2;  // [v5] slightly wider trail
-input bool   UseBreakEven        = true;
-input double BreakEvenATR        = 0.7;
+input group "=== VETO SYSTEM PARAMETERS ==="
+input bool      ENABLE_VETO_SYSTEM = true;       // Enable veto system
+input double    VOLATILITY_THRESHOLD = 2.0;      // Volatility threshold for veto
+input double    SENTIMENT_THRESHOLD = -0.5;      // Sentiment threshold for veto
+input int       VETO_DECAY_SECONDS = 300;        // Veto decay time in seconds
 
-input group "=== ADVANCED PROFIT GUARD ==="
-input bool   UsePartialProfit    = true;
-input double TP1_Ratio           = 1.2;
-input double TP1_ClosePercent    = 40.0; // [v5] close 40% at TP1, let 60% run
-input bool   UseAdvancedBreakeven= true;
-input int    BreakevenBufferPips = 3;
-input bool   UseProfitLock       = true;
-input double ProfitLockRatio     = 2.5;
+//--- Global variables
+CTrade         m_trade;
+CPositionInfo  m_position;
+COrderInfo     m_order;
+double         m_market_data[100];
+double         m_indicators[100];
+double         m_price_history[];
+int            m_time_history[];
+string         m_symbol = _Symbol;
+ENUM_TIMEFRAMES m_timeframe = PERIOD_CURRENT;
 
-input group "=== [v5] CONFLUENCE FILTER ==="
-input bool   UseConfluenceFilter = true; // Require M1+M5+H1 alignment
-input bool   UseMomentumFilter   = true; // Price must be moving in signal direction
-input bool   UseMarketStructure  = true; // Require HH/LL market structure
-input double MinConfidence       = 62.0; // [v5] Raised from 60 for precision
-input int    MinScoreThreshold   = 5;    // [v5] Raised from 4
-
-input group "=== [v5] ADAPTIVE CIRCUIT BREAKER ==="
-input bool   UseAdaptiveCB         = true;  // Enable Adaptive Circuit Breaker
-input double CB_LossPctTrigger     = 2.0;   // Trigger CB when session loss >= X% of balance
-input double CB_EquityDDTrigger    = 3.0;   // Trigger CB when equity drops X% from session peak
-input int    CB_MaxConsecLosses    = 3;     // Also trigger if N consecutive losses
-// Pause duration is DYNAMIC — calculated from market volatility (ATR) + loss severity
-// Minimum and maximum bounds only:
-input int    CB_MinPauseMinutes    = 10;    // Minimum pause (minutes)
-input int    CB_MaxPauseMinutes    = 120;   // Maximum pause (minutes)
-
-input group "=== MULTI-TIMEFRAME ==="
-input bool              UseMultiTimeframe = true;
-input ENUM_TIMEFRAMES   HigherTimeframe   = PERIOD_H4;
-
-input group "=== VOLUME ANALYSIS ==="
-input bool   UseVolumeAnalysis   = true;
-input double MinVolumeMultiplier = 1.3;  // [v5] slightly less restrictive
-
-input group "=== TIME FILTER ==="
-input bool   EnableTimeFilter    = false;  // [v7] DEPRECATED — kept for backward compat, always false
-input int    StartTradeHour      = 0;      // [v7] No restriction
-input int    EndTradeHour        = 24;     // [v7] 24/7 trading enabled
-
-input group "=== INDICATORS ==="
-input int    FastEMA_Period      = 8;
-input int    SlowEMA_Period      = 21;
-input int    TrendEMA_Period     = 89;
-input int    RSI_Period          = 14;
-input double RSI_OB              = 70.0;
-input double RSI_OS              = 30.0;
-input int    MACD_Fast           = 12;
-input int    MACD_Slow           = 26;
-input int    MACD_Signal         = 9;
-input int    BB_Period           = 20;
-input double BB_Deviation        = 2.0;
-input int    ATR_Period          = 14;
-input int    Stoch_K             = 5;
-input int    Stoch_D             = 3;
-input int    Stoch_Slow          = 3;
-input int    ADX_Period          = 14;
-input double ADX_MinStrength     = 22.0;
-
-input group "=== ADAPTIVE LOGIC ==="
-input bool   UseAdaptiveLogic        = true;
-input int    TrendingADXThreshold    = 28;
-input int    RangingADXThreshold     = 20;
-input double VolatileATRMultiplier   = 1.5;
-
-input group "=== SESSION FILTER ==="
-input bool   UseSessionFilter    = true;
-input bool   TradeAsianSession   = false;
-input bool   TradeLondonSession  = true;
-input bool   TradeNYSession      = true;
-input int    SessionBuffer_Min   = 10;
-
-input group "=== SCALPING SETTINGS ==="
-input int    ScalpM1_RSI_OS      = 38;
-input int    ScalpM1_RSI_OB      = 62;
-input int    ScalpMinPoints      = 50;
-
-input group "=== EXECUTION SETTINGS ==="
-input int    TradeCooldownSec    = 1;
-input bool   TickBasedEntry      = true; // [v6] UHF default ON — tick-based 1-sec execution
-input int    MaxSpreadPips       = 35;
-input int    SlippagePoints      = 30;
-input bool   ShowDebugLog        = true;
-
-input group "=== P&L ALERT SETTINGS ==="
-input bool   AlertOnTradeOpen    = true;
-input bool   AlertOnTradeClose   = true;
-input bool   PushNotifyOnTrade   = true;
-input bool   PushNotifyOnDaily   = true;
-
-input group "=== DISCORD NOTIFICATIONS ==="
-input bool   UseDiscord          = true;
-input string DiscordWebhookURL   = "https://discord.com/api/webhooks/1508113914955694250/_8dwDMyQjYf1efakaHKLwxMce-0qTr_fWaKlebrY84VQPsWQcoZQ9xuZOoDS4VQ76bkn";
-input bool   NotifyOnTrade       = true;
-input bool   NotifyOnDailyReport = true;
-input bool   NotifyOnBotState    = true;
-input bool   NotifyOnRiskEvent   = true;
-input bool   NotifyExtendedStats = true;  // [v5] Extended session stats in Discord
-input string DiscordBotName      = "GoldHunter UHF AGI v6 MT5";
-input int    DiscordTimeoutMS    = 7000;
-
-input group "=== MANUAL BOT CONTROL ==="
-input bool   BotEnabledByDefault      = true;
-input bool   EnableChartControlButton = true;
-input bool   ManagePositionsWhenPaused= true;
-input bool   ClosePositionsWhenStopped= false;
-
-input group "=== DISPLAY ==="
-input bool   ShowDashboard  = true;
-input color  PanelColor     = C'18,22,38';
-input color  ProfitColor    = clrLime;
-input color  LossColor      = clrRed;
-input color  TextColor      = clrWhite;
-
-input group "=== PHASE 3: AGENTIC AI FEATURES ==="
-input bool   EnableSpecialistAgents = true;  // Enable 5 Specialist Agents
-input bool   EnableVetoSystem       = true;  // Enable VETO power for critical agents
-input int    ConsensusThreshold     = 2;     // Minimum votes for trade approval (if no veto)
-input bool   EnableDagExecution     = true;  // Enable 5-Node Order Execution DAG
-input string TradeLogCSV            = "GoldHunter_TradeLog_v8.csv";  // Phase 2: Enhanced CSV logging
-input string MemoryStateFile        = "GoldHunter_Memory_v8.dat";   // Phase 2: Memory persistence
-
-//==========================================================================
-//  INDICATOR HANDLES
-//==========================================================================
-int handleEMAFast, handleEMASlow, handleEMATrend;
-int handleRSI, handleMACD, handleBB, handleATR;
-int handleStoch, handleADX, handleEMATrend_HTF;
-int handleScalpEMA5, handleScalpEMA13, handleScalpRSI7;
-int handleH4EMA50, handleH4EMA200;
-// [v5] Multi-timeframe confluence handles
-int handleM5EMAFast, handleM5EMASlow, handleM5RSI;
-int handleH1EMAFast, handleH1EMASlow, handleH1RSI;
-
-//==========================================================================
-//  GLOBAL VARIABLES
-//==========================================================================
-double atrValue, rsiValue, macdMain, macdSignal;
-double bbUpper, bbMiddle, bbLower;
-double emaFast, emaSlow, emaTrend, emaTrend_HTF;
-double stochMain, stochSignal;
-double adxValue, plusDI, minusDI;
-double averageVolume, prevAtrValue;
-
-// TP1 tracking
-ulong  tp1ExecutedTickets[];
-int    tp1ExecutedCount = 0;
-
-double dailyStartBalance  = 0;
-double weeklyStartBalance = 0;
-datetime lastTradeTime    = 0;
-int    tradesThisDay      = 0;
-datetime currentDay       = 0;
-datetime currentWeek      = 0;
-bool   tradingHalted      = false;  // [v6] Deprecated: No longer used for hard halts
-bool   manualBotEnabled   = true;
-bool   manualSessionFilter= true;
-bool   discordWarnShown   = false;
-datetime lastDiscordErrTime = 0;
-string lastSignal         = "SCANNING...";
-int    winCount           = 0;
-int    lossCount          = 0;
-double totalProfit        = 0;
-int    currentStrategy    = 0;
-
-// [v6] Defensive state instead of hard halt - MUST be declared before use
-enum ENUM_TRADING_STATE {
-   STATE_RUNNING,
-   STATE_DEFENSIVE_MONITORING,  // Risk threshold breached but still learning
-   STATE_PAUSED_MANUAL,
-   STATE_DISABLED
-};
-ENUM_TRADING_STATE currentTradingState = STATE_RUNNING;
-
-// [v5] Adaptive Circuit Breaker
-int    consecutiveLosses  = 0;
-datetime cbPauseUntil     = 0;
-double sessionPeakEquity  = 0;   // Tracks equity peak within current trading session
-string cbTriggerReason    = "";  // Why CB was triggered (for Discord report)
-int    cbPauseMinutesLast = 0;   // How long the last pause was (for stats)
-
-// [v5] Session stats
-int    londonWins=0, londonLosses=0;
-int    nyWins=0,     nyLosses=0;
-int    asianWins=0,  asianLosses=0;
-double londonPnL=0,  nyPnL=0, asianPnL=0;
-
-// [v5] Drawdown tracking
-double peakEquity         = 0;
-double maxDrawdownPct     = 0;
-int    winStreak          = 0;
-int    lossStreak         = 0;
-int    maxWinStreak       = 0;
-int    maxLossStreak      = 0;
-
-// [v5] Weekly report
-datetime lastWeeklyReport = 0;
-
-#define EA_MAGIC_NUMBER     202501
-#define BOT_BUTTON_NAME     "GHP_TOGGLE_BOT"
-#define SESSION_BUTTON_NAME "GHP_TOGGLE_SESSION"
-#define EA_VERSION          "6.0"
-
-// --- Alias macros: map legacy names used in code to the actual input variable names ---
-#define MaxConsecutiveLosses  CB_MaxConsecLosses
-#define CBPauseMinutes        CB_MinPauseMinutes
-
-string stratNames[] = {"AUTO-AI","SCALPING","SWING","BREAKOUT","REVERSAL"};
-
-//==========================================================================
-//  PHASE 3: SPECIALIST AGENT STRUCTURES
-//==========================================================================
-struct AgentVote {
-   string agent_name;      // Name of the specialist agent
-   int    signal;          // 1=Buy, -1=Sell, 0=Neutral/Abstain
-   double confidence;      // 0.0 to 1.0 confidence score
-   bool   veto;            // TRUE if this agent exercises VETO power
-   string reasoning;       // Explainable AI: reason for decision
-};
-
-//==========================================================================
-//  PHASE 3: ORDER EXECUTION DAG NODE RESULT
-//==========================================================================
-struct DAGNodeResult {
-   string node_name;       // Name of the DAG node
-   bool   passed;          // TRUE if node validation passed
-   string error_message;   // Error message if failed
-   datetime timestamp;     // When this node executed
-};
-
-//==========================================================================
-//  PHASE 2: ENHANCED TRADE RECORD (TradeRecordV8)
-//==========================================================================
-struct TradeRecordV8 {
-   datetime open_time;
-   long     ticket;
-   ENUM_ORDER_TYPE type;
-   double   volume;
-   double   open_price;
-   double   sl;
-   double   tp;
-   double   close_price;
-   datetime close_time;
-   double   profit;
-   double   commission;
-   double   swap;
-   
-   // AI Metadata (Phase 2)
-   int      state_id;           // Q-Table state encoding
-   double   prior_prob;         // Bayesian prior probability
-   double   posterior_prob;     // Bayesian posterior probability
-   string   agent_votes;        // Serialized specialist agent votes
-   string   dag_trace;          // DAG execution path trace
-   string   veto_reason;        // If rejected: which agent vetoed
-};
-
-//==========================================================================
-//  PHASE 2: TWO-TIER MEMORY SYSTEM
-//==========================================================================
-struct SessionWorkingMemory {
-   double recent_regimes[10];      // Ring buffer: recent market regimes
-   double recent_confidence[10];   // Ring buffer: recent confidence scores
-   int    head_index;              // Current position in ring buffer
-   
-   double session_pnl;             // Cumulative P&L this session
-   int    trades_today;            // Number of trades today
-   datetime last_reset_time;       // Last reset timestamp
-};
-
-// [v7] ASI AGI Core Structures
-struct TradeRecord {
-   datetime timestamp;
-   ENUM_ORDER_TYPE type;
-   double entryPrice;
-   double exitPrice;
-   double profit;
-   double slDistance;
-   double tpDistance;
-   int regime;
-   int strategy;
-   double confidence;
-   string reasons;
-};
-
-struct QTableEntry {
-   double qValues[3];  // 0=Buy, 1=Sell, 2=Hold
-   int visitCount;
-   datetime lastUpdate;
-};
-
-struct BayesianStrategyProb {
-   double scalpProb;
-   double swingProb;
-   double breakoutProb;
-   double reversalProb;
-   double autoProb;
-   int totalObservations;
-};
-
-struct NeuralNetworkLayer {
-   double weights[10][15];  // 10 inputs, 15 hidden neurons
-   double hiddenBias[15];
-   double outputWeights[15];
-   double outputBias;
-};
-
-// [v7] Tick type constants for order flow analysis
-#define TICK_TYPE_BUY   1
-#define TICK_TYPE_SELL -1
-#define TICK_TYPE_UNKNOWN 0
-
-struct TickDeltaBuffer {
-   double buyVolume[60];    // 60-second circular buffer
-   double sellVolume[60];
-   int currentIndex;
-   datetime lastUpdate;
-};
-
-struct CorrelationGuard {
-   double xauReturn[20];
-   double dxyReturn[20];
-   int currentIndex;
-   bool dxyAvailable;
-};
-
-struct SelfHealOptimizer {
-   int tradeBatchCount;
-   double bestSharpe;
-   double bestATR_SL;
-   double bestATR_TP;
-   double bestMinConf;
-   datetime lastOptimize;
-};
-
-// [v7] Global AGI/ASI State Variables
-TradeRecord tradeHistory[];
-int tradeHistoryCount = 0;
-QTableEntry qTable[];
-int qTableSize = 0;
-BayesianStrategyProb bayesProbs;
-NeuralNetworkLayer nnLayer;
-TickDeltaBuffer tickDelta;
-CorrelationGuard corrGuard;
-SelfHealOptimizer optimizer;
-
-//==========================================================================
-//  PHASE 2 & 3: GLOBAL STATE VARIABLES
-//==========================================================================
-SessionWorkingMemory working_memory;        // Phase 2: Working Memory (Tier 1)
-TradeRecordV8        episodic_memory[];     // Phase 2: Episodic Memory (Tier 2)
-AgentVote            specialist_agents[5];  // Phase 3: 5 Specialist Agents
-DAGNodeResult        dag_nodes[5];          // Phase 3: 5-Node Execution DAG
-
-// Phase 2: Bayesian Priors per Strategy (Alpha=success, Beta=failure)
-double strategy_alpha[5];   // Success counts for 5 strategies
-double strategy_beta[5];    // Failure counts for 5 strategies
-
-// Phase 2: Q-Table State Encoding
-int Q_TABLE_STATES = 360;   // 5(regime)*4(RSI)*3(ADX)*3(session)*2(trend)
-double q_table_values[];    // Q-values for each state-action pair
-
-// Phase 3: DAG Execution State
-int dag_success_count = 0;
-int dag_failure_count = 0;
-datetime last_dag_failure_time = 0;
-string last_veto_reason = "";
-
-// CSV file paths for learning
-string tradeLogCSV = "GoldHunter_TradeLog.csv";
-string qTableCSV = "GoldHunter_QTable.csv";
-string nnWeightsJSON = "GoldHunter_NN_Weights.json";
-
-// Learning parameters
-input bool   UseReinforcementLearning = true;   // [v7] Enable Q-learning
-input bool   UseBayesianInference     = true;   // [v7] Enable Bayesian strategy selection
-input bool   UseNeuralNetwork         = false;  // [v7] Enable NN (requires weights file)
-input bool   UseOrderFlowImbalance    = true;   // [v7] Enable tick delta analysis
-input bool   UseCorrelationGuard      = true;   // [v7] DXY correlation check
-input bool   UseSelfHealingOptimizer  = true;   // [v7] Auto-optimize parameters
-
-#define MAX_TRADE_HISTORY 500
-#define MAX_QTABLE_ENTRIES 200
-#define Q_LEARNING_RATE 0.1
-#define Q_DISCOUNT_FACTOR 0.9
-#define Q_EPSILON 0.15
-
-// [v7] MarketScore struct (original from v6)
-struct MarketScore {
-   int    buyScore;
-   int    sellScore;
-   string reasons;
-   double confidence;
-};
-
-//==========================================================================
-//  PHASE 1: AGENT CONTEXT STRUCT (OODA Message Envelope)
-//==========================================================================
+//--- Agent Context Structure
 struct AgentContext {
-   // Observation outputs
-   bool           dataValid;
-   int            marketRegime;       // 1=Bull 2=Bear 3=Ranging 4=Volatile 5=Calm
-   double         atrValue, rsiValue, adxValue, emaFast, emaSlow, emaTrend;
-   double         macdMain, macdSignal, bbUpper, bbMiddle, bbLower;
-   double         stochMain, stochSignal, plusDI, minusDI;
-   double         averageVolume, prevAtrValue, emaTrend_HTF;
-   // Multi-TF buffers for confluence sub-agents
-   double         m5EMAFast, m5EMASlow, m5RSI;
-   double         h1EMAFast, h1EMASlow, h1RSI;
-
-   // Orientation outputs (vote aggregation)
-   int            agentBuyVotes;       // sum of specialist agent BUY votes
-   int            agentSellVotes;      // sum of specialist agent SELL votes
-   double         aggregateConfidence; // 0.0–100.0
-   string         decisionReasons;
-   int            selectedStrategy;    // 0=Auto 1=Scalp 2=Swing 3=Breakout 4=Reversal
-
-   // Decision outputs
-   bool           tradingAllowed;      // all gates passed
-   string         blockReason;         // if tradingAllowed=false, why
-
-   // Plan outputs
-   ENUM_ORDER_TYPE proposedType;
-   double         proposedLots;
-   double         proposedEntry;
-   double         proposedSL;
-   double         proposedTP;
-
-   // Execution outputs
-   bool           orderPlaced;
-   ulong          placedTicket;
-   uint           lastRetcode;
-
-   // Reflection outputs
-   bool           reflectionComplete;
+    double balance;
+    double equity;
+    double margin;
+    double free_margin;
+    double margin_level;
+    int position_count;
+    double total_profit;
+    double total_volume;
+    datetime last_update;
+    double volatility;
+    double sentiment_score;
+    int trend_direction;
+    double momentum;
+    double mean_deviation;
 };
 
-//==========================================================================
-//  PHASE 1: PIPELINE TRACE LOGGING (Mechanistic Interpretability)
-//==========================================================================
-string pipelineTrace[];
-int pipelineTraceHead = 0;
-#define MAX_PIPELINE_TRACE 50
-
-void PipelineTraceLog(string phase, string status, string details)
-{
-   string entry = StringFormat("[%s][%s][%d] %s", phase, status, GetTickCount(), details);
-   
-   if(ArraySize(pipelineTrace) < MAX_PIPELINE_TRACE) {
-      ArrayResize(pipelineTrace, ArraySize(pipelineTrace) + 1);
-      pipelineTrace[ArraySize(pipelineTrace)-1] = entry;
-   } else {
-      // Circular buffer: overwrite oldest
-      pipelineTrace[pipelineTraceHead] = entry;
-      pipelineTraceHead = (pipelineTraceHead + 1) % MAX_PIPELINE_TRACE;
-   }
-}
-
-void PrintPipelineTrace()
-{
-   LogStatus("=== PIPELINE TRACE ===");
-   int start = (ArraySize(pipelineTrace) < MAX_PIPELINE_TRACE) ? 0 : pipelineTraceHead;
-   int count = ArraySize(pipelineTrace);
-   for(int i = 0; i < count; i++) {
-      int idx = (start + i) % count;
-      Print(pipelineTrace[idx]);
-   }
-}
-
-//==========================================================================
-//  PHASE 1: SAFETY LAYER PRE-CHECK
-//==========================================================================
-bool SafetyLayer_PreCheck()
-{
-   // Check if bot is enabled
-   if(!IsBotTradingAllowed()) {
-      PipelineTraceLog("SAFETY", "BLOCK", "Bot not enabled");
-      return false;
-   }
-   
-   // Check circuit breaker pause
-   if(cbPauseUntil > 0 && TimeCurrent() < cbPauseUntil) {
-      PipelineTraceLog("SAFETY", "BLOCK", "Circuit breaker active");
-      return false;
-   }
-   
-   // Lift circuit breaker if time expired
-   if(cbPauseUntil > 0 && TimeCurrent() >= cbPauseUntil) {
-      cbPauseUntil      = 0;
-      consecutiveLosses = 0;
-      sessionPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-      if(NotifyOnBotState)
-         SendDiscord(StringFormat("✅ **ADAPTIVE CB LIFTED** — Trading resumed.\n"
-                                  "Trigger was: `%s`\n"
-                                  "Paused for: `%d min`\n"
-                                  "Equity now: `$%.2f`",
-                                  cbTriggerReason, cbPauseMinutesLast,
-                                  AccountInfoDouble(ACCOUNT_EQUITY)));
-      cbTriggerReason = "";
-      PipelineTraceLog("SAFETY", "CB_LIFTED", "Circuit breaker lifted");
-   }
-   
-   return true;
-}
-
-void SafetyLayer_PostCheck(AgentContext &ctx)
-{
-   // Update trading state based on outcomes
-   CheckSafetyLimits();
-   
-   // Log final pipeline state
-   if(ctx.orderPlaced) {
-      PipelineTraceLog("SAFETY", "OK", "Trade executed, ticket="+(string)ctx.placedTicket);
-   }
-}
-
-//==========================================================================
-//  OnInit
-//==========================================================================
-int OnInit()
-{
-   if(!symbolInfo.Name(Symbol())) {
-      Alert("GoldHunter v8.3 Phase 3: Cannot load symbol info for ", Symbol());
-      return INIT_FAILED;
-   }
-   symbolInfo.RefreshRates();
-
-   // Current TF handles
-   handleEMAFast      = iMA(Symbol(), PERIOD_CURRENT, FastEMA_Period,  0, MODE_EMA, PRICE_CLOSE);
-   handleEMASlow      = iMA(Symbol(), PERIOD_CURRENT, SlowEMA_Period,  0, MODE_EMA, PRICE_CLOSE);
-   handleEMATrend     = iMA(Symbol(), PERIOD_H1,      TrendEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleRSI          = iRSI(Symbol(), PERIOD_CURRENT, RSI_Period, PRICE_CLOSE);
-   handleMACD         = iMACD(Symbol(), PERIOD_CURRENT, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
-   handleBB           = iBands(Symbol(), PERIOD_CURRENT, BB_Period, 0, BB_Deviation, PRICE_CLOSE);
-   handleATR          = iATR(Symbol(), PERIOD_CURRENT, ATR_Period);
-   handleStoch        = iStochastic(Symbol(), PERIOD_CURRENT, Stoch_K, Stoch_D, Stoch_Slow, MODE_SMA, STO_LOWHIGH);
-   handleADX          = iADX(Symbol(), PERIOD_CURRENT, ADX_Period);
-   handleScalpEMA5    = iMA(Symbol(), PERIOD_M1, 5,   0, MODE_EMA, PRICE_CLOSE);
-   handleScalpEMA13   = iMA(Symbol(), PERIOD_M1, 13,  0, MODE_EMA, PRICE_CLOSE);
-   handleScalpRSI7    = iRSI(Symbol(), PERIOD_M1, 7,  PRICE_CLOSE);
-   handleH4EMA50      = iMA(Symbol(), PERIOD_H4, 50,  0, MODE_EMA, PRICE_CLOSE);
-   handleH4EMA200     = iMA(Symbol(), PERIOD_H4, 200, 0, MODE_EMA, PRICE_CLOSE);
-
-   // [v5] M5 confluence handles
-   handleM5EMAFast    = iMA(Symbol(), PERIOD_M5,  FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleM5EMASlow    = iMA(Symbol(), PERIOD_M5,  SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleM5RSI        = iRSI(Symbol(), PERIOD_M5, RSI_Period, PRICE_CLOSE);
-
-   // [v5] H1 confluence handles
-   handleH1EMAFast    = iMA(Symbol(), PERIOD_H1, FastEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleH1EMASlow    = iMA(Symbol(), PERIOD_H1, SlowEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-   handleH1RSI        = iRSI(Symbol(), PERIOD_H1, RSI_Period, PRICE_CLOSE);
-
-   if(UseMultiTimeframe)
-      handleEMATrend_HTF = iMA(Symbol(), HigherTimeframe, TrendEMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-
-   if(handleEMAFast  == INVALID_HANDLE || handleEMASlow  == INVALID_HANDLE ||
-      handleRSI      == INVALID_HANDLE || handleMACD     == INVALID_HANDLE ||
-      handleATR      == INVALID_HANDLE || handleADX      == INVALID_HANDLE) {
-      Alert("GoldHunter v8.3: Indicator init FAILED. Check symbol: ", Symbol());
-      return INIT_FAILED;
-   }
-
-   trade.SetExpertMagicNumber(EA_MAGIC_NUMBER);
-   trade.SetDeviationInPoints(SlippagePoints);
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
-
-   dailyStartBalance  = AccountInfoDouble(ACCOUNT_BALANCE);
-   weeklyStartBalance = dailyStartBalance;
-   peakEquity         = AccountInfoDouble(ACCOUNT_EQUITY);
-   sessionPeakEquity  = peakEquity;
-   currentDay         = iTime(Symbol(), PERIOD_D1, 0);
-   currentWeek        = iTime(Symbol(), PERIOD_W1, 0);
-   manualBotEnabled   = BotEnabledByDefault;
-   manualSessionFilter= UseSessionFilter;
-
-   ArrayResize(tp1ExecutedTickets, 0);
-   tp1ExecutedCount = 0;
-
-   //=======================================================================
-   //  PHASE 2 & 3 INITIALIZATION
-   //=======================================================================
-   
-   // Initialize Working Memory (Phase 2)
-   working_memory.head_index = 0;
-   working_memory.session_pnl = 0.0;
-   working_memory.trades_today = 0;
-   working_memory.last_reset_time = TimeCurrent();
-   ArrayInitialize(working_memory.recent_regimes, 0);
-   ArrayInitialize(working_memory.recent_confidence, 0.0);
-   
-   // Initialize Bayesian Priors (Phase 2) - Uniform Prior (Alpha=1, Beta=1)
-   for(int i=0; i<5; i++) {
-      strategy_alpha[i] = 1.0;
-      strategy_beta[i] = 1.0;
-   }
-   
-   // Initialize Q-Table (Phase 2)
-   ArrayResize(q_table_values, Q_TABLE_STATES * 3);  // 3 actions per state
-   ArrayInitialize(q_table_values, 0.0);
-   
-   // Initialize Specialist Agents (Phase 3)
-   for(int i=0; i<5; i++) {
-      specialist_agents[i].signal = 0;
-      specialist_agents[i].confidence = 0.0;
-      specialist_agents[i].veto = false;
-      specialist_agents[i].reasoning = "";
-   }
-   specialist_agents[0].agent_name = "TrendAgent";
-   specialist_agents[1].agent_name = "MomentumAgent";
-   specialist_agents[2].agent_name = "MeanReversionAgent";
-   specialist_agents[3].agent_name = "VolatilityAgent";
-   specialist_agents[4].agent_name = "SentimentAgent";
-   
-   // Initialize DAG Nodes (Phase 3)
-   for(int i=0; i<5; i++) {
-      dag_nodes[i].passed = false;
-      dag_nodes[i].error_message = "";
-   }
-   dag_nodes[0].node_name = "Validation";
-   dag_nodes[1].node_name = "RiskCheck";
-   dag_nodes[2].node_name = "PreFlight";
-   dag_nodes[3].node_name = "Submission";
-   dag_nodes[4].node_name = "Confirmation";
-   
-   dag_success_count = 0;
-   dag_failure_count = 0;
-   last_dag_failure_time = 0;
-   
-   // Load Episodic Memory from CSV (Phase 2)
-   if(UseBayesianInference) {
-      LoadEpisodicMemory();
-      Print("Phase 2: Loaded ", ArraySize(episodic_memory), " historical trades from memory");
-   }
-
-   if(ShowDashboard)            CreateDashboard();
-   if(EnableChartControlButton) { CreateBotControlButton(); CreateSessionControlButton(); }
-   UpdateBotControlButton();
-   UpdateSessionControlButton();
-
-   SendDiscordStartupReport();
-   Print("GoldHunter UHF AGI v8.3 Phase 3 initialized. Symbol: ", Symbol(),
-         " | Magic: ", EA_MAGIC_NUMBER,
-         " | Agents: 5 Specialists + VETO | DAG: 5-Node Execution");
-   return INIT_SUCCEEDED;
-}
-
-//==========================================================================
-//  OnDeinit
-//==========================================================================
-void OnDeinit(const int reason)
-{
-   IndicatorRelease(handleEMAFast);   IndicatorRelease(handleEMASlow);
-   IndicatorRelease(handleEMATrend);  IndicatorRelease(handleRSI);
-   IndicatorRelease(handleMACD);      IndicatorRelease(handleBB);
-   IndicatorRelease(handleATR);       IndicatorRelease(handleStoch);
-   IndicatorRelease(handleADX);       IndicatorRelease(handleScalpEMA5);
-   IndicatorRelease(handleScalpEMA13);IndicatorRelease(handleScalpRSI7);
-   IndicatorRelease(handleH4EMA50);   IndicatorRelease(handleH4EMA200);
-   IndicatorRelease(handleM5EMAFast); IndicatorRelease(handleM5EMASlow);
-   IndicatorRelease(handleM5RSI);     IndicatorRelease(handleH1EMAFast);
-   IndicatorRelease(handleH1EMASlow); IndicatorRelease(handleH1RSI);
-   if(UseMultiTimeframe) IndicatorRelease(handleEMATrend_HTF);
-
-   ObjectsDeleteAll(ChartID(), "GHP_");
-   
-   // Phase 2: Save Episodic Memory before shutdown
-   if(UseBayesianInference) {
-      SaveEpisodicMemory();
-      Print("Phase 2: Saved ", ArraySize(episodic_memory), " trades to episodic memory");
-   }
-   
-   SendDiscordShutdownReport(reason);
-}
-
-//==========================================================================
-//  OnTick — Main Loop
-//==========================================================================
-void OnTick()
-{
-   CheckNewDay();
-   CheckWeeklyReport();
-
-   if(!symbolInfo.RefreshRates()) return;
-
-   if(!UpdateIndicators()) {
-      LogStatus("Waiting for indicators...");
-      return;
-   }
-
-   // [v5] Peak equity tracking for drawdown
-   double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(curEquity > peakEquity)        peakEquity        = curEquity;
-   if(curEquity > sessionPeakEquity) sessionPeakEquity = curEquity;
-   if(peakEquity > 0) {
-      double dd = (peakEquity - curEquity) / peakEquity * 100.0;
-      if(dd > maxDrawdownPct) maxDrawdownPct = dd;
-   }
-
-   double currentSpread = (symbolInfo.Ask() - symbolInfo.Bid()) / symbolInfo.Point();
-   if(currentSpread > MaxSpreadPips) {
-      LogStatus(StringFormat("Spread too high: %.1f > %d", currentSpread, MaxSpreadPips));
-      lastSignal = "⚠️ SPREAD HIGH";
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   if(!IsBotTradingAllowed()) {
-      lastSignal = manualBotEnabled ? "⏸️ DISABLED BY INPUT" : "⏸️ PAUSED MANUALLY";
-      if(ManagePositionsWhenPaused) ManagePositions();
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   // [v5] Circuit breaker check
-   if(cbPauseUntil > 0 && TimeCurrent() < cbPauseUntil) {
-      int remaining = (int)(cbPauseUntil - TimeCurrent()) / 60;
-      lastSignal = StringFormat("⏸️ CB PAUSE — %dm left", remaining);
-      if(ManagePositionsWhenPaused) ManagePositions();
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-   if(cbPauseUntil > 0 && TimeCurrent() >= cbPauseUntil) {
-      cbPauseUntil      = 0;
-      consecutiveLosses = 0;
-      sessionPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY); // reset session peak after pause
-      if(NotifyOnBotState)
-         SendDiscord(StringFormat("✅ **ADAPTIVE CB LIFTED** — Trading resumed.\n"
-                                  "Trigger was: `%s`\n"
-                                  "Paused for: `%d min`\n"
-                                  "Equity now: `$%.2f`",
-                                  cbTriggerReason, cbPauseMinutesLast,
-                                  AccountInfoDouble(ACCOUNT_EQUITY)));
-      cbTriggerReason = "";
-   }
-
-   // [v6] CheckSafetyLimits now always returns true - no hard halts
-   CheckSafetyLimits();  // Still call to update state and send notifications
-   
-   if(manualSessionFilter && !IsActiveSession()) {
-      lastSignal = "⏰ Waiting for session...";
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   ManagePositions();
-
-   // [v5] Bar-close gate — wait for confirmed candle
-   static datetime lastBar = 0;
-   datetime currentBar     = iTime(Symbol(), PERIOD_CURRENT, 0);
-   bool isNewBar           = (currentBar != lastBar);
-   if(isNewBar) lastBar    = currentBar;
-
-   if(!isNewBar && !TickBasedEntry) {
-      if(ShowDashboard) UpdateDashboard();
-      return;
-   }
-
-   if(AutoSelectStrategy) currentStrategy = SelectBestStrategy();
-   else                   currentStrategy = StrategyMode;
-
-   MarketScore score;
-   switch(currentStrategy) {
-      case 1:  score = StrategyScalping();  break;
-      case 2:  score = StrategySwing();     break;
-      case 3:  score = StrategyBreakout();  break;
-      case 4:  score = StrategyReversal();  break;
-      default: score = StrategyAutoAI();    break;
-   }
-
-   ExecuteSignal(score);
-
-   if(ShowDashboard) UpdateDashboard();
-}
-
-//==========================================================================
-//  OnChartEvent
-//==========================================================================
-void OnChartEvent(const int id, const long &lparam,
-                  const double &dparam, const string &sparam)
-{
-   if(id != CHARTEVENT_OBJECT_CLICK) return;
-
-   if(sparam == SESSION_BUTTON_NAME) {
-      manualSessionFilter = !manualSessionFilter;
-      UpdateSessionControlButton();
-      if(NotifyOnBotState)
-         SendDiscord("🔔 **SESSION FILTER** → " +
-                     (manualSessionFilter ? "ON (Session hours active)" : "OFF (Trading 24h)"));
-      ChartRedraw(ChartID());
-      return;
-   }
-
-   if(sparam == BOT_BUTTON_NAME) {
-      manualBotEnabled = !manualBotEnabled;
-      UpdateBotControlButton();
-      UpdateSessionControlButton();
-      if(!manualBotEnabled && ClosePositionsWhenStopped)
-         CloseAllEAPositions("Manual stop");
-      if(NotifyOnBotState)
-         SendDiscordBotStateReport(manualBotEnabled ? "RESUMED" : "PAUSED",
-                                   manualBotEnabled ? "Bot re-enabled by user" : "Bot paused manually");
-      ChartRedraw(ChartID());
-   }
-}
-
-//==========================================================================
-//  Bot State
-//==========================================================================
-bool IsBotTradingAllowed() { return (BotEnabledByDefault && manualBotEnabled); }
-
-string GetBotRuntimeStatus()
-{
-   if(!BotEnabledByDefault) return "DISABLED_BY_INPUT";
-   if(!manualBotEnabled)    return "PAUSED_MANUAL";
-   // [v6] No hard halts - only defensive monitoring state
-   if(currentTradingState == STATE_DEFENSIVE_MONITORING) return "DEFENSIVE_MONITORING";
-   if(cbPauseUntil > TimeCurrent() && cbPauseUntil > 0) return "CB_PAUSE";
-   return "RUNNING";
-}
-
-void CreateBotControlButton()
-{
-   if(ObjectFind(ChartID(), BOT_BUTTON_NAME) >= 0) return;
-   ObjectCreate(ChartID(), BOT_BUTTON_NAME, OBJ_BUTTON, 0, 0, 0);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_XDISTANCE, 300);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_YDISTANCE, 30);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_XSIZE, 150);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_YSIZE, 32);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_FONTSIZE, 10);
-   ObjectSetString(ChartID(),  BOT_BUTTON_NAME, OBJPROP_FONT, "Arial Bold");
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_BORDER_COLOR, clrWhite);
-}
-
-void UpdateBotControlButton()
-{
-   if(!EnableChartControlButton) return;
-   if(ObjectFind(ChartID(), BOT_BUTTON_NAME) < 0) CreateBotControlButton();
-   bool active = IsBotTradingAllowed();
-   ObjectSetString(ChartID(),  BOT_BUTTON_NAME, OBJPROP_TEXT,
-                   active ? "✅ BOT ON — คลิกปิด" : "⛔ BOT OFF — คลิกเปิด");
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_BGCOLOR, active ? clrDarkGreen : clrFireBrick);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_COLOR, clrWhite);
-   ObjectSetInteger(ChartID(), BOT_BUTTON_NAME, OBJPROP_STATE, false);
-}
-
-void CreateSessionControlButton()
-{
-   if(ObjectFind(ChartID(), SESSION_BUTTON_NAME) >= 0) return;
-   ObjectCreate(ChartID(), SESSION_BUTTON_NAME, OBJ_BUTTON, 0, 0, 0);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_XDISTANCE, 460);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_YDISTANCE, 30);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_XSIZE, 155);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_YSIZE, 32);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_FONTSIZE, 9);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_SELECTABLE, false);
-}
-
-void UpdateSessionControlButton()
-{
-   if(ObjectFind(ChartID(), SESSION_BUTTON_NAME) < 0) CreateSessionControlButton();
-   color  bg  = manualSessionFilter ? clrDarkOrange : clrSlateGray;
-   string txt = "SESSION: " + (manualSessionFilter ? "ON ⏰" : "OFF (24h)");
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_BGCOLOR, bg);
-   ObjectSetInteger(ChartID(), SESSION_BUTTON_NAME, OBJPROP_COLOR, clrWhite);
-   ObjectSetString(ChartID(),  SESSION_BUTTON_NAME, OBJPROP_TEXT, txt);
-}
-
-void CloseAllEAPositions(string reason)
-{
-   int closed = 0;
-   for(int i = PositionsTotal()-1; i >= 0; i--) {
-      if(!posInfo.SelectByIndex(i)) continue;
-      if(posInfo.Symbol() != Symbol() || posInfo.Magic() != EA_MAGIC_NUMBER) continue;
-      if(trade.PositionClose(posInfo.Ticket())) closed++;
-   }
-   if(closed > 0 && NotifyOnTrade)
-      SendDiscord("🛑 **EA POSITIONS CLOSED** | Reason: " + reason +
-                  " | Count: " + IntegerToString(closed));
-}
-
-//==========================================================================
-//  UpdateIndicators
-//==========================================================================
-bool UpdateIndicators()
-{
-   double emaFastBuf[3], emaSlowBuf[3], emaTrendBuf[3], emaTrendHTFBuf[3];
-   double rsiBuf[3], macdMainBuf[3], macdSigBuf[3];
-   double bbUpperBuf[3], bbMidBuf[3], bbLowerBuf[3];
-   double atrBuf[3], stochKBuf[3], stochDBuf[3];
-   double adxBuf[3], plusDIBuf[3], minusDIBuf[3];
-
-   if(CopyBuffer(handleEMAFast,  0, 0, 3, emaFastBuf)  < 3) return false;
-   if(CopyBuffer(handleEMASlow,  0, 0, 3, emaSlowBuf)  < 3) return false;
-   if(CopyBuffer(handleEMATrend, 0, 0, 3, emaTrendBuf) < 3) return false;
-   if(CopyBuffer(handleRSI,      0, 0, 3, rsiBuf)      < 3) return false;
-   if(CopyBuffer(handleMACD,     0, 0, 3, macdMainBuf) < 3) return false;
-   if(CopyBuffer(handleMACD,     1, 0, 3, macdSigBuf)  < 3) return false;
-   if(CopyBuffer(handleBB,       0, 0, 3, bbUpperBuf)  < 3) return false;
-   if(CopyBuffer(handleBB,       1, 0, 3, bbMidBuf)    < 3) return false;
-   if(CopyBuffer(handleBB,       2, 0, 3, bbLowerBuf)  < 3) return false;
-   if(CopyBuffer(handleATR,      0, 0, 3, atrBuf)      < 3) return false;
-   if(CopyBuffer(handleStoch,    0, 0, 3, stochKBuf)   < 3) return false;
-   if(CopyBuffer(handleStoch,    1, 0, 3, stochDBuf)   < 3) return false;
-   if(CopyBuffer(handleADX,      0, 0, 3, adxBuf)      < 3) return false;
-   if(CopyBuffer(handleADX,      1, 0, 3, plusDIBuf)   < 3) return false;
-   if(CopyBuffer(handleADX,      2, 0, 3, minusDIBuf)  < 3) return false;
-
-   if(UseMultiTimeframe) {
-      if(CopyBuffer(handleEMATrend_HTF, 0, 0, 3, emaTrendHTFBuf) < 3) return false;
-      emaTrend_HTF = emaTrendHTFBuf[1];
-   }
-
-   if(UseVolumeAnalysis) {
-      long volBuf[10];
-      if(CopyTickVolume(Symbol(), PERIOD_CURRENT, 1, 10, volBuf) < 10) return false;
-      averageVolume = 0;
-      for(int i = 0; i < 10; i++) averageVolume += (double)volBuf[i];
-      averageVolume /= 10.0;
-   }
-
-   emaFast    = emaFastBuf[1];
-   emaSlow    = emaSlowBuf[1];
-   emaTrend   = emaTrendBuf[1];
-   rsiValue   = rsiBuf[1];
-   macdMain   = macdMainBuf[1];
-   macdSignal = macdSigBuf[1];
-   bbUpper    = bbUpperBuf[1];
-   bbMiddle   = bbMidBuf[1];
-   bbLower    = bbLowerBuf[1];
-   atrValue   = atrBuf[1];
-   prevAtrValue = atrBuf[2];
-   stochMain  = stochKBuf[1];
-   stochSignal= stochDBuf[1];
-   adxValue   = adxBuf[1];
-   plusDI     = plusDIBuf[1];
-   minusDI    = minusDIBuf[1];
-
-   return true;
-}
-
-//==========================================================================
-//  [v5] IsStrongConfluence — M1 + M5 + H1 must agree
-//==========================================================================
-bool IsStrongConfluence(bool isBuy)
-{
-   if(!UseConfluenceFilter) return true;
-
-   double m5Fast[1], m5Slow[1], m5RSI[1];
-   double h1Fast[1], h1Slow[1], h1RSI[1];
-
-   if(CopyBuffer(handleM5EMAFast, 0, 1, 1, m5Fast) < 1) return false;
-   if(CopyBuffer(handleM5EMASlow, 0, 1, 1, m5Slow) < 1) return false;
-   if(CopyBuffer(handleM5RSI,     0, 1, 1, m5RSI)  < 1) return false;
-   if(CopyBuffer(handleH1EMAFast, 0, 1, 1, h1Fast) < 1) return false;
-   if(CopyBuffer(handleH1EMASlow, 0, 1, 1, h1Slow) < 1) return false;
-   if(CopyBuffer(handleH1RSI,     0, 1, 1, h1RSI)  < 1) return false;
-
-   int alignCount = 0;
-
-   if(isBuy) {
-      // M1 alignment
-      if(emaFast > emaSlow) alignCount++;
-      // M5 alignment
-      if(m5Fast[0] > m5Slow[0] && m5RSI[0] > 45) alignCount++;
-      // H1 alignment
-      if(h1Fast[0] > h1Slow[0] && h1RSI[0] > 45) alignCount++;
-   } else {
-      // M1 alignment
-      if(emaFast < emaSlow) alignCount++;
-      // M5 alignment
-      if(m5Fast[0] < m5Slow[0] && m5RSI[0] < 55) alignCount++;
-      // H1 alignment
-      if(h1Fast[0] < h1Slow[0] && h1RSI[0] < 55) alignCount++;
-   }
-
-   // Require at least 2 of 3 timeframes aligned
-   return (alignCount >= 2);
-}
-
-//==========================================================================
-//  [v5] IsMomentumAligned — last 3 bars moving in direction
-//==========================================================================
-bool IsMomentumAligned(bool isBuy)
-{
-   if(!UseMomentumFilter) return true;
-
-   double c1 = iClose(Symbol(), PERIOD_CURRENT, 1);
-   double c2 = iClose(Symbol(), PERIOD_CURRENT, 2);
-   double c3 = iClose(Symbol(), PERIOD_CURRENT, 3);
-
-   if(isBuy)
-      return (c1 > c2 || c2 > c3); // at least one recent up move
-   else
-      return (c1 < c2 || c2 < c3); // at least one recent down move
-}
-
-//==========================================================================
-//  [v5] Market Structure — HH/HL or LH/LL over last 20 bars
-//==========================================================================
-bool IsMarketStructureBull()
-{
-   if(!UseMarketStructure) return true;
-   // Check for Higher High and Higher Low in last 20 bars
-   double hh1 = iHigh(Symbol(), PERIOD_CURRENT, 5);
-   double hh2 = iHigh(Symbol(), PERIOD_CURRENT, 15);
-   double ll1 = iLow(Symbol(),  PERIOD_CURRENT, 5);
-   double ll2 = iLow(Symbol(),  PERIOD_CURRENT, 15);
-   return (hh1 > hh2 && ll1 > ll2);
-}
-
-bool IsMarketStructureBear()
-{
-   if(!UseMarketStructure) return true;
-   double hh1 = iHigh(Symbol(), PERIOD_CURRENT, 5);
-   double hh2 = iHigh(Symbol(), PERIOD_CURRENT, 15);
-   double ll1 = iLow(Symbol(),  PERIOD_CURRENT, 5);
-   double ll2 = iLow(Symbol(),  PERIOD_CURRENT, 15);
-   return (hh1 < hh2 && ll1 < ll2);
-}
-
-//==========================================================================
-//  DetectMarketRegime — 1=Bull 2=Bear 3=Ranging 4=Volatile 5=Calm
-//==========================================================================
-int DetectMarketRegime()
-{
-   int regime = 5;
-
-   if(adxValue > TrendingADXThreshold)
-      regime = (plusDI >= minusDI) ? 1 : 2;
-
-   double bbWidth = (bbMiddle > 0) ? (bbUpper - bbLower) / bbMiddle : 0;
-   if(bbWidth < 0.002 && adxValue < RangingADXThreshold) regime = 3;
-
-   if(prevAtrValue > 0 && atrValue > prevAtrValue * VolatileATRMultiplier) regime = 4;
-
-   // [v7] Time filter disabled — no artificial time restrictions
-   // EnableTimeFilter is deprecated and always evaluates to false for execution gating
-
-   return regime;
-}
-
-//==========================================================================
-//  IsPinBar (fixed shadow ratio)
-//==========================================================================
-bool IsPinBar(ENUM_TIMEFRAMES tf, int shift,
-              double minBodyRatio = 0.25, double minShadowBodyRatio = 2.0)
-{
-   double open  = iOpen(Symbol(),  tf, shift);
-   double close = iClose(Symbol(), tf, shift);
-   double high  = iHigh(Symbol(),  tf, shift);
-   double low   = iLow(Symbol(),   tf, shift);
-
-   double body        = MathAbs(close - open);
-   double totalRange  = high - low;
-   if(totalRange < symbolInfo.Point() * 5) return false;
-
-   double upperShadow = high - MathMax(open, close);
-   double lowerShadow = MathMin(open, close) - low;
-
-   bool isBullishPin = (body / totalRange <= minBodyRatio) &&
-                       (lowerShadow >= body * minShadowBodyRatio) &&
-                       (upperShadow <= body);
-   bool isBearishPin = (body / totalRange <= minBodyRatio) &&
-                       (upperShadow >= body * minShadowBodyRatio) &&
-                       (lowerShadow <= body);
-
-   return isBullishPin || isBearishPin;
-}
-
-bool IsEngulfingBar(ENUM_TIMEFRAMES tf, int shift)
-{
-   double o0 = iOpen(Symbol(), tf, shift),   c0 = iClose(Symbol(), tf, shift);
-   double o1 = iOpen(Symbol(), tf, shift+1), c1 = iClose(Symbol(), tf, shift+1);
-   bool bullEngulf = (c0>o0) && (c1<o1) && (o0<=c1) && (c0>=o1);
-   bool bearEngulf = (c0<o0) && (c1>o1) && (o0>=c1) && (c0<=o1);
-   return bullEngulf || bearEngulf;
-}
-
-//==========================================================================
-//  [v5] GetDynamicConfidence — adjust threshold per session/regime
-//==========================================================================
-double GetDynamicMinConfidence()
-{
-   double base = MinConfidence;
-   int regime  = DetectMarketRegime();
-
-   // Require higher confidence in choppy/volatile markets
-   if(regime == 3) base += 5.0;  // ranging — harder to predict
-   if(regime == 4) base += 8.0;  // volatile — higher bar
-
-   // Lower threshold during high-probability sessions
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   double t = dt.hour + dt.min / 60.0;
-   if(t >= 8.0 && t <= 12.0) base -= 3.0; // London open — best hours
-   if(t >= 13.0 && t <= 16.0) base -= 2.0; // London/NY overlap
-
-   return MathMax(55.0, MathMin(80.0, base));
-}
-
-//==========================================================================
-//  Auto-AI Strategy
-//==========================================================================
-MarketScore StrategyAutoAI()
-{
-   MarketScore score;
-   score.buyScore = 0; score.sellScore = 0;
-   score.reasons  = ""; score.confidence = 0;
-
-   double close   = iClose(Symbol(), PERIOD_CURRENT, 1);
-   int    regime  = DetectMarketRegime();
-
-   int tw=3, mw=2, vw=2, rw=1;
-   if(regime==1)      { tw=5; mw=3; vw=1; rw=0; }
-   else if(regime==2) { tw=5; mw=3; vw=1; rw=0; }
-   else if(regime==3) { tw=1; mw=2; vw=3; rw=4; }
-   else if(regime==4) { tw=2; mw=2; vw=4; rw=1; }
-   else               { tw=0; mw=1; vw=2; rw=2; }
-
-   bool bullTrend = (emaFast > emaSlow) && (close > emaTrend);
-   bool bullHTF   = (UseMultiTimeframe && close > emaTrend_HTF);
-   bool bearTrend = (emaFast < emaSlow) && (close < emaTrend);
-   bool bearHTF   = (UseMultiTimeframe && close < emaTrend_HTF);
-
-   if(bullTrend)  { score.buyScore  += tw;     score.reasons += "✅ Bull Trend | "; }
-   if(bullHTF)    { score.buyScore  += (tw-1);  score.reasons += "✅ HTF Bull | "; }
-   if(bearTrend)  { score.sellScore += tw;     score.reasons += "✅ Bear Trend | "; }
-   if(bearHTF)    { score.sellScore += (tw-1);  score.reasons += "✅ HTF Bear | "; }
-
-   // Volume confirmation
-   if(UseVolumeAnalysis && averageVolume > 0) {
-      long curVol = iVolume(Symbol(), PERIOD_CURRENT, 1);
-      if(curVol > averageVolume * MinVolumeMultiplier) {
-         if(bullTrend || bullHTF) score.buyScore++;
-         if(bearTrend || bearHTF) score.sellScore++;
-         score.reasons += "📈 Vol Confirm | ";
-      }
-   }
-
-   // EMA cross
-   double emaFastBuf[3], emaSlowBuf[3];
-   if(CopyBuffer(handleEMAFast, 0, 1, 2, emaFastBuf)>0 &&
-      CopyBuffer(handleEMASlow, 0, 1, 2, emaSlowBuf)>0) {
-      double prevFast = emaFastBuf[0], prevSlow = emaSlowBuf[0];
-      if(emaFast > emaSlow && prevFast <= prevSlow) { score.buyScore  += mw; score.reasons += "⬆️ EMA Cross Up | "; }
-      if(emaFast < emaSlow && prevFast >= prevSlow) { score.sellScore += mw; score.reasons += "⬇️ EMA Cross Dn | "; }
-   }
-
-   // RSI
-   if(rsiValue < RSI_OS && rsiValue > 20)  { score.buyScore  += mw; score.reasons += "📊 RSI OS | "; }
-   if(rsiValue > RSI_OB && rsiValue < 80)  { score.sellScore += mw; score.reasons += "📊 RSI OB | "; }
-
-   // MACD
-   if(macdMain > macdSignal && macdMain > 0) { score.buyScore  += mw; score.reasons += "⚡ MACD Bull | "; }
-   if(macdMain < macdSignal && macdMain < 0) { score.sellScore += mw; score.reasons += "⚡ MACD Bear | "; }
-
-   // Bollinger Bands
-   if(close < bbLower)  { score.buyScore  += vw; score.reasons += "📉 BB Low | "; }
-   if(close > bbUpper)  { score.sellScore += vw; score.reasons += "📈 BB High | "; }
-
-   // BB Squeeze
-   double bbWidth = (bbMiddle > 0) ? (bbUpper - bbLower) / bbMiddle : 0;
-   if(bbWidth < 0.003 && close > bbMiddle) { score.buyScore  += (vw+1); score.reasons += "⬆️ BB Squeeze ↑ | "; }
-   if(bbWidth < 0.003 && close < bbMiddle) { score.sellScore += (vw+1); score.reasons += "⬇️ BB Squeeze ↓ | "; }
-
-   // Stochastic
-   if(stochMain < 20 && stochMain > stochSignal) { score.buyScore  += rw; score.reasons += "🔄 Stoch OS | "; }
-   if(stochMain > 80 && stochMain < stochSignal) { score.sellScore += rw; score.reasons += "🔄 Stoch OB | "; }
-
-   // Pin Bar
-   if(IsPinBar(PERIOD_CURRENT, 1)) {
-      if(iClose(Symbol(), PERIOD_CURRENT, 1) > iOpen(Symbol(), PERIOD_CURRENT, 1))
-           { score.buyScore  += (rw+1); score.reasons += "🕯️ Bull Pin | "; }
-      else { score.sellScore += (rw+1); score.reasons += "🕯️ Bear Pin | "; }
-   }
-
-   // Engulfing
-   if(IsEngulfingBar(PERIOD_CURRENT, 1)) {
-      if(iClose(Symbol(), PERIOD_CURRENT, 1) > iOpen(Symbol(), PERIOD_CURRENT, 1))
-           { score.buyScore  += rw; score.reasons += "🕯️ Bull Engulf | "; }
-      else { score.sellScore += rw; score.reasons += "🕯️ Bear Engulf | "; }
-   }
-
-   // ADX filter
-   if(adxValue < ADX_MinStrength) {
-      score.buyScore  = (int)(score.buyScore  * 0.7);
-      score.sellScore = (int)(score.sellScore * 0.7);
-      score.reasons += "⚠️ Weak ADX | ";
-   }
-   if(adxValue > 40) {
-      if(plusDI > minusDI) score.buyScore  += 2;
-      else                  score.sellScore += 2;
-      score.reasons += "💪 Strong ADX | ";
-   }
-
-   // [v5] Market structure bonus
-   if(UseMarketStructure) {
-      if(IsMarketStructureBull() && score.buyScore > score.sellScore)
-         { score.buyScore += 2; score.reasons += "🏗️ Bull Struct | "; }
-      if(IsMarketStructureBear() && score.sellScore > score.buyScore)
-         { score.sellScore += 2; score.reasons += "🏗️ Bear Struct | "; }
-   }
-
-   int total = score.buyScore + score.sellScore;
-   if(total > 0) score.confidence = (MathMax(score.buyScore, score.sellScore) / (double)total) * 100.0;
-   return score;
-}
-
-//==========================================================================
-//  Strategy 1: Scalping
-//==========================================================================
-MarketScore StrategyScalping()
-{
-   MarketScore score;
-   score.buyScore = 0; score.sellScore = 0;
-   score.reasons  = "SCALP | "; score.confidence = 0;
-
-   double ema5Buf[1], ema13Buf[1], rsi7Buf[1];
-   if(CopyBuffer(handleScalpEMA5,  0, 1, 1, ema5Buf)  < 1) return score;
-   if(CopyBuffer(handleScalpEMA13, 0, 1, 1, ema13Buf) < 1) return score;
-   if(CopyBuffer(handleScalpRSI7,  0, 1, 1, rsi7Buf)  < 1) return score;
-
-   double m1Fast = ema5Buf[0], m1Slow = ema13Buf[0], m1RSI = rsi7Buf[0];
-
-   if(symbolInfo.Spread() * symbolInfo.Point() > atrValue * 0.3) {
-      score.reasons += "❌ Spread wide"; return score;
-   }
-
-   if(m1Fast > m1Slow && m1RSI < ScalpM1_RSI_OB && m1RSI > 50 && emaFast > emaSlow) {
-      score.buyScore = 6; score.reasons += "M1+M5 Bull EMA+RSI";
-   }
-   if(m1Fast < m1Slow && m1RSI > ScalpM1_RSI_OS && m1RSI < 50 && emaFast < emaSlow) {
-      score.sellScore = 6; score.reasons += "M1+M5 Bear EMA+RSI";
-   }
-
-   // [v5] Require momentum for scalp
-   if(score.buyScore > 0 && !IsMomentumAligned(true))  { score.buyScore = 0;  score.reasons += " | ❌ No Momentum"; }
-   if(score.sellScore > 0 && !IsMomentumAligned(false)) { score.sellScore = 0; score.reasons += " | ❌ No Momentum"; }
-
-   score.confidence = (MathMax(score.buyScore, score.sellScore) > 0) ? 75.0 : 0.0;
-   return score;
-}
-
-//==========================================================================
-//  Strategy 2: Swing
-//==========================================================================
-MarketScore StrategySwing()
-{
-   MarketScore score;
-   score.buyScore = 0; score.sellScore = 0;
-   score.reasons  = "SWING | "; score.confidence = 0;
-
-   double h4_50Buf[1], h4_200Buf[1];
-   if(CopyBuffer(handleH4EMA50,  0, 1, 1, h4_50Buf)  < 1) return score;
-   if(CopyBuffer(handleH4EMA200, 0, 1, 1, h4_200Buf) < 1) return score;
-
-   bool h4Bull = h4_50Buf[0] > h4_200Buf[0];
-   bool h4Bear = h4_50Buf[0] < h4_200Buf[0];
-
-   if(h4Bull && rsiValue < 45 && emaFast > emaSlow && IsMarketStructureBull()) {
-      score.buyScore = 8; score.reasons += "H4 Bull + Pullback Buy + Structure";
-   }
-   if(h4Bear && rsiValue > 55 && emaFast < emaSlow && IsMarketStructureBear()) {
-      score.sellScore = 8; score.reasons += "H4 Bear + Pullback Sell + Structure";
-   }
-
-   if(adxValue < 25) { score.buyScore = 0; score.sellScore = 0; score.reasons += " | ADX<25 filtered"; }
-   score.confidence = 82.0;
-   return score;
-}
-
-//==========================================================================
-//  Strategy 3: Breakout
-//==========================================================================
-MarketScore StrategyBreakout()
-{
-   MarketScore score;
-   score.buyScore = 0; score.sellScore = 0;
-   score.reasons  = "BREAKOUT | "; score.confidence = 0;
-
-   double close  = iClose(Symbol(), PERIOD_CURRENT, 1);
-   double close2 = iClose(Symbol(), PERIOD_CURRENT, 2);
-
-   long volBuf[4];
-   if(CopyTickVolume(Symbol(), PERIOD_CURRENT, 0, 4, volBuf) < 4) return score;
-   long avgVol = MathMax(1, (volBuf[1] + volBuf[0]) / 2);
-   bool volSurge = (volBuf[2] > avgVol * 1.5);
-
-   if(close > bbUpper && close2 < bbUpper && volSurge) {
-      score.buyScore = 8; score.reasons += "BB Break Up + Vol ✅";
-   }
-   if(close < bbLower && close2 > bbLower && volSurge) {
-      score.sellScore = 8; score.reasons += "BB Break Dn + Vol ✅";
-   }
-
-   double highest = 0, lowest = 9999999;
-   for(int i = 2; i <= 20; i++) {
-      highest = MathMax(highest, iHigh(Symbol(), PERIOD_CURRENT, i));
-      lowest  = MathMin(lowest,  iLow(Symbol(),  PERIOD_CURRENT, i));
-   }
-   if(close > highest * 1.0001) { score.buyScore  += 3; score.reasons += "20H Break | "; }
-   if(close < lowest  * 0.9999) { score.sellScore += 3; score.reasons += "20L Break | "; }
-
-   score.confidence = 85.0;
-   return score;
-}
-
-//==========================================================================
-//  Strategy 4: Reversal
-//==========================================================================
-MarketScore StrategyReversal()
-{
-   MarketScore score;
-   score.buyScore = 0; score.sellScore = 0;
-   score.reasons  = "REVERSAL | "; score.confidence = 0;
-
-   double close = iClose(Symbol(), PERIOD_CURRENT, 1);
-
-   if(rsiValue < 25) { score.buyScore  += 5; score.reasons += "RSI Extreme OS | "; }
-   if(rsiValue > 75) { score.sellScore += 5; score.reasons += "RSI Extreme OB | "; }
-
-   if(bbMiddle > bbLower) {
-      double relBB = (close - bbLower) / (bbUpper - bbLower);
-      if(relBB < 0.05 && stochMain < 20) { score.buyScore  += 4; score.reasons += "BB+Stoch Low | "; }
-      if(relBB > 0.95 && stochMain > 80) { score.sellScore += 4; score.reasons += "BB+Stoch High | "; }
-   }
-
-   double prevClose = iClose(Symbol(), PERIOD_CURRENT, 5);
-   double macdBuf[6];
-   if(CopyBuffer(handleMACD, 0, 0, 6, macdBuf) >= 6) {
-      double prevMACD = macdBuf[0];
-      if(close < prevClose && macdMain > prevMACD && rsiValue < 45)
-         { score.buyScore  += 3; score.reasons += "MACD Div Bull | "; }
-      if(close > prevClose && macdMain < prevMACD && rsiValue > 55)
-         { score.sellScore += 3; score.reasons += "MACD Div Bear | "; }
-   }
-
-   // [v5] Require Pin or Engulf for reversal
-   if(!IsPinBar(PERIOD_CURRENT, 1) && !IsEngulfingBar(PERIOD_CURRENT, 1)) {
-      score.buyScore  = (int)(score.buyScore  * 0.6);
-      score.sellScore = (int)(score.sellScore * 0.6);
-      score.reasons += "⚠️ No Candle Pattern | ";
-   }
-
-   score.confidence = 72.0;
-   return score;
-}
-
-//==========================================================================
-//  SelectBestStrategy
-//==========================================================================
-int SelectBestStrategy()
-{
-   if(!UseAdaptiveLogic) return StrategyMode;
-
-   int    regime  = DetectMarketRegime();
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-
-   if(balance < 50) return (regime == 3 || regime == 5) ? 1 : 0;
-
-   switch(regime) {
-      case 1: return 2;  // Bull trend → Swing
-      case 2: return 2;  // Bear trend → Swing
-      case 3: return 1;  // Ranging → Scalping
-      case 4: return 3;  // Volatile → Breakout
-      case 5: return 1;  // Calm → Scalping
-   }
-
-   if(adxValue > TrendingADXThreshold) return 2;
-   if(rsiValue < 25 || rsiValue > 75)  return 4;
-   double bbW = (bbMiddle > 0) ? (bbUpper - bbLower) / bbMiddle : 0;
-   if(bbW < 0.003) return 3;
-   return 0;
-}
-
-//==========================================================================
-//  Adaptive SL/TP multipliers
-//==========================================================================
-void GetAdaptiveSLTPMultipliers(int regime, double &sl_m, double &tp_m)
-{
-   sl_m = ATR_SL_Multiplier;
-   tp_m = ATR_TP_Multiplier;
-   if(!UseAdaptiveLogic) return;
-   switch(regime) {
-      case 1: sl_m *= 1.2; tp_m *= 1.6; break;
-      case 2: sl_m *= 1.2; tp_m *= 1.6; break;
-      case 3: sl_m *= 0.8; tp_m *= 0.8; break;
-      case 4: sl_m *= 1.5; tp_m *= 1.0; break;
-      case 5: sl_m *= 0.7; tp_m *= 0.7; break;
-   }
-}
-
-//==========================================================================
-//  TryPlaceOrder — fill type retry
-//==========================================================================
-bool TryPlaceOrder(ENUM_ORDER_TYPE type, double lots, double price,
-                   double sl, double tp, string comment)
-{
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
-   bool ok = (type == ORDER_TYPE_BUY) ?
-              trade.Buy(lots, Symbol(), price, sl, tp, comment) :
-              trade.Sell(lots, Symbol(), price, sl, tp, comment);
-   if(ok) return true;
-
-   uint retcode = trade.ResultRetcode();
-   LogStatus(StringFormat("IOC failed: %s (%d) — retrying FOK", RetcodeToString(retcode), retcode));
-
-   trade.SetTypeFilling(ORDER_FILLING_FOK);
-   ok = (type == ORDER_TYPE_BUY) ?
-        trade.Buy(lots, Symbol(), price, sl, tp, comment) :
-        trade.Sell(lots, Symbol(), price, sl, tp, comment);
-   if(ok) { trade.SetTypeFilling(ORDER_FILLING_IOC); return true; }
-
-   retcode = trade.ResultRetcode();
-   LogStatus(StringFormat("FOK failed: %s (%d) — retrying RETURN", RetcodeToString(retcode), retcode));
-
-   trade.SetTypeFilling(ORDER_FILLING_RETURN);
-   ok = (type == ORDER_TYPE_BUY) ?
-        trade.Buy(lots, Symbol(), price, sl, tp, comment) :
-        trade.Sell(lots, Symbol(), price, sl, tp, comment);
-
-   trade.SetTypeFilling(ORDER_FILLING_IOC);
-   if(!ok) {
-      retcode = trade.ResultRetcode();
-      Print("GHP_ERROR: All fill attempts failed. Retcode=", retcode, " (", RetcodeToString(retcode), ")");
-   }
-   return ok;
-}
-
-//==========================================================================
-//  ExecuteSignal — [v5] adds confluence + momentum + dynamic confidence
-//==========================================================================
-void ExecuteSignal(MarketScore &score)
-{
-   double dynConfidence = GetDynamicMinConfidence();
-   int    minScore      = MinScoreThreshold;
-
-   for(int i = PositionsTotal()-1; i >= 0; i--) {
-      if(posInfo.SelectByIndex(i))
-         if(posInfo.Symbol() == Symbol() && posInfo.Magic() == EA_MAGIC_NUMBER) return;
-   }
-
-   if((int)(TimeCurrent() - lastTradeTime) < TradeCooldownSec) return;
-   if(!symbolInfo.RefreshRates()) return;
-
-   double ask = symbolInfo.Ask();
-   double bid = symbolInfo.Bid();
-   int    regime = DetectMarketRegime();
-   double sl_m, tp_m;
-   GetAdaptiveSLTPMultipliers(regime, sl_m, tp_m);
-
-   double slDist = UseATRStops ? (atrValue * sl_m) : (FixedSL_Points * symbolInfo.Point());
-   double tpDist = UseATRStops ? (atrValue * tp_m) : (FixedTP_Points * symbolInfo.Point());
-
-   double lots = CalculateLotSize(slDist);
-   if(lots <= 0) return;
-
-   int    digits = symbolInfo.Digits();
-
-   //--- BUY signal
-   if(score.buyScore >= minScore && score.buyScore > score.sellScore &&
-      score.confidence >= dynConfidence) {
-
-      // [v5] Confluence + Momentum + Structure gates
-      if(!IsStrongConfluence(true))  { lastSignal = "⏳ No TF Confluence (B)"; return; }
-      if(!IsMomentumAligned(true))   { lastSignal = "⏳ No Momentum (B)"; return; }
-
-      double sl = NormalizeDouble(bid - slDist, digits);
-      double tp = NormalizeDouble(ask + tpDist, digits);
-
-      if(TryPlaceOrder(ORDER_TYPE_BUY, lots, ask, sl, tp,
-                       "GHP5_" + stratNames[currentStrategy])) {
-         lastTradeTime = TimeCurrent();
-         tradesThisDay++;
-         consecutiveLosses = 0; // reset on new trade
-         lastSignal = StringFormat("🟢 BUY @ %.2f", ask);
-
-         if(AlertOnTradeOpen)
-            Alert(StringFormat("[GoldHunter v5] 🟢 BUY GOLD OPENED\n"
-                               "Price: %.2f | SL: %.2f | TP: %.2f\n"
-                               "Lot: %.2f | Strategy: %s | Score: %d | Conf: %.0f%%\n"
-                               "Balance: $%.2f",
-                               ask, sl, tp, lots,
-                               stratNames[currentStrategy], score.buyScore,
-                               score.confidence,
-                               AccountInfoDouble(ACCOUNT_BALANCE)));
-
-         if(PushNotifyOnTrade)
-            SendNotification(StringFormat("GHP5 BUY GOLD | %.2f | SL:%.2f TP:%.2f | Lot:%.2f",
-                                          ask, sl, tp, lots));
-
-         if(NotifyOnTrade)
-            SendDiscord(StringFormat(
-               "🟢 **BUY GOLD OPENED** [v5]\n"
-               "💲 Price: `%.2f`\n🎯 TP: `%.2f`  🛡️ SL: `%.2f`\n"
-               "📦 Lot: `%.2f`  🧠 Strategy: `%s`\n"
-               "📊 Score: `%d`  🎯 Conf: `%.0f%%`  Threshold: `%.0f%%`\n"
-               "🔍 Reasons: %s\n"
-               "💰 Balance: `$%.2f`  Trades today: `%d`",
-               ask, tp, sl, lots, stratNames[currentStrategy],
-               score.buyScore, score.confidence, dynConfidence,
-               score.reasons,
-               AccountInfoDouble(ACCOUNT_BALANCE), tradesThisDay));
-      }
-   }
-   //--- SELL signal
-   else if(score.sellScore >= minScore && score.sellScore > score.buyScore &&
-           score.confidence >= dynConfidence) {
-
-      if(!IsStrongConfluence(false)) { lastSignal = "⏳ No TF Confluence (S)"; return; }
-      if(!IsMomentumAligned(false))  { lastSignal = "⏳ No Momentum (S)"; return; }
-
-      double sl = NormalizeDouble(ask + slDist, digits);
-      double tp = NormalizeDouble(bid - tpDist, digits);
-
-      if(TryPlaceOrder(ORDER_TYPE_SELL, lots, bid, sl, tp,
-                       "GHP5_" + stratNames[currentStrategy])) {
-         lastTradeTime = TimeCurrent();
-         tradesThisDay++;
-         consecutiveLosses = 0;
-         lastSignal = StringFormat("🔴 SELL @ %.2f", bid);
-
-         if(AlertOnTradeOpen)
-            Alert(StringFormat("[GoldHunter v5] 🔴 SELL GOLD OPENED\n"
-                               "Price: %.2f | SL: %.2f | TP: %.2f\n"
-                               "Lot: %.2f | Strategy: %s | Score: %d | Conf: %.0f%%\n"
-                               "Balance: $%.2f",
-                               bid, sl, tp, lots,
-                               stratNames[currentStrategy], score.sellScore,
-                               score.confidence,
-                               AccountInfoDouble(ACCOUNT_BALANCE)));
-
-         if(PushNotifyOnTrade)
-            SendNotification(StringFormat("GHP5 SELL GOLD | %.2f | SL:%.2f TP:%.2f | Lot:%.2f",
-                                          bid, sl, tp, lots));
-
-         if(NotifyOnTrade)
-            SendDiscord(StringFormat(
-               "🔴 **SELL GOLD OPENED** [v5]\n"
-               "💲 Price: `%.2f`\n🎯 TP: `%.2f`  🛡️ SL: `%.2f`\n"
-               "📦 Lot: `%.2f`  🧠 Strategy: `%s`\n"
-               "📊 Score: `%d`  🎯 Conf: `%.0f%%`  Threshold: `%.0f%%`\n"
-               "🔍 Reasons: %s\n"
-               "💰 Balance: `$%.2f`  Trades today: `%d`",
-               bid, tp, sl, lots, stratNames[currentStrategy],
-               score.sellScore, score.confidence, dynConfidence,
-               score.reasons,
-               AccountInfoDouble(ACCOUNT_BALANCE), tradesThisDay));
-      }
-   }
-   else {
-      LogStatus(StringFormat("Weak signal — B:%d S:%d Conf:%.0f%% Need:%.0f%%",
-                             score.buyScore, score.sellScore,
-                             score.confidence, dynConfidence));
-      lastSignal = StringFormat("⏳ B:%d S:%d [%.0f%%/%.0f%%]",
-                                score.buyScore, score.sellScore,
-                                score.confidence, dynConfidence);
-   }
-}
-
-//==========================================================================
-//  TP1 tracking helpers
-//==========================================================================
-bool IsTP1AlreadyExecuted(ulong ticket)
-{
-   for(int i = 0; i < tp1ExecutedCount; i++)
-      if(tp1ExecutedTickets[i] == ticket) return true;
-   return false;
-}
-
-void MarkTP1Executed(ulong ticket)
-{
-   ArrayResize(tp1ExecutedTickets, tp1ExecutedCount + 1);
-   tp1ExecutedTickets[tp1ExecutedCount] = ticket;
-   tp1ExecutedCount++;
-}
-
-bool ClosePartialPosition(ulong ticket, double volumeToClose)
-{
-   if(!posInfo.SelectByTicket(ticket)) return false;
-
-   ENUM_POSITION_TYPE ptype  = posInfo.PositionType();
-   double currentVolume      = posInfo.Volume();
-   double minLotStep         = symbolInfo.LotsStep();
-
-   volumeToClose = NormalizeDouble(MathFloor(volumeToClose / minLotStep) * minLotStep, 2);
-   if(volumeToClose <= 0 || volumeToClose >= currentVolume) return false;
-
-   MqlTradeRequest req; MqlTradeResult res;
-   ZeroMemory(req); ZeroMemory(res);
-
-   req.action    = TRADE_ACTION_DEAL;
-   req.position  = ticket;
-   req.symbol    = posInfo.Symbol();
-   req.volume    = volumeToClose;
-   req.deviation = SlippagePoints;
-   req.magic     = EA_MAGIC_NUMBER;
-
-   if(ptype == POSITION_TYPE_BUY) {
-      req.type         = ORDER_TYPE_SELL;
-      req.price        = symbolInfo.Bid();
-      req.type_filling = ORDER_FILLING_IOC;
-   } else {
-      req.type         = ORDER_TYPE_BUY;
-      req.price        = symbolInfo.Ask();
-      req.type_filling = ORDER_FILLING_IOC;
-   }
-
-   if(!OrderSend(req, res)) {
-      Print("GHP: Partial close error: ", GetLastError(), " Retcode: ", RetcodeToString(res.retcode));
-      return false;
-   }
-
-   if(res.retcode == TRADE_RETCODE_DONE) {
-      MarkTP1Executed(ticket);
-      if(NotifyOnTrade)
-         SendDiscord(StringFormat("📤 **PARTIAL CLOSE** | #%d | Vol: %.2f | TP1 hit", (int)ticket, volumeToClose));
-      return true;
-   }
-   Print("GHP: Partial close retcode: ", RetcodeToString(res.retcode));
-   return false;
-}
-
-//==========================================================================
-//  ManagePositions — [v5] adds phantom SL guard + min-step check
-//==========================================================================
-void ManagePositions()
-{
-   int regime = DetectMarketRegime();
-   double sl_m, tp_m;
-   GetAdaptiveSLTPMultipliers(regime, sl_m, tp_m);
-
-   double trailDist = atrValue * TrailATRMultiplier;
-   double slDist    = UseATRStops ? (atrValue * sl_m) : (FixedSL_Points * symbolInfo.Point());
-   int    digits    = symbolInfo.Digits();
-   double minStep   = symbolInfo.Point() * 5;
-
-   for(int i = PositionsTotal()-1; i >= 0; i--) {
-      if(!posInfo.SelectByIndex(i)) continue;
-      if(posInfo.Symbol() != Symbol() || posInfo.Magic() != EA_MAGIC_NUMBER) continue;
-
-      ulong  ticket    = posInfo.Ticket();
-      double openPrice = posInfo.PriceOpen();
-      double curSL     = posInfo.StopLoss();
-      double curTP     = posInfo.TakeProfit();
-      double volume    = posInfo.Volume();
-      double bid       = symbolInfo.Bid();
-      double ask       = symbolInfo.Ask();
-
-      if(posInfo.PositionType() == POSITION_TYPE_BUY) {
-         double profitPts = (bid - openPrice) / symbolInfo.Point();
-         double beDist    = UseBreakEven ? (atrValue * BreakEvenATR) :
-                            (UseAdvancedBreakeven ? (BreakevenBufferPips * symbolInfo.Point()) : 0);
-
-         // [v5] Phantom SL guard — price gapped past SL
-         if(curSL > 0 && bid < curSL) {
-            trade.PositionClose(ticket);
-            continue;
-         }
-
-         // BreakEven
-         if((UseBreakEven || UseAdvancedBreakeven) && bid > openPrice + beDist && curSL < openPrice) {
-            double newSL = NormalizeDouble(openPrice + BreakevenBufferPips * symbolInfo.Point(), digits);
-            if(newSL > curSL + minStep) trade.PositionModify(ticket, newSL, curTP);
-         }
-
-         // TP1 Partial
-         double tp1_pts = slDist / symbolInfo.Point() * TP1_Ratio;
-         if(UsePartialProfit && profitPts >= tp1_pts && !IsTP1AlreadyExecuted(ticket)) {
-            double volClose = NormalizeDouble(volume * TP1_ClosePercent / 100.0, 2);
-            if(volClose > 0) ClosePartialPosition(ticket, volClose);
-         }
-
-         // Profit Lock
-         if(UseProfitLock) {
-            double lockThresh = openPrice + slDist * ProfitLockRatio;
-            double lockSL     = NormalizeDouble(openPrice + slDist * (ProfitLockRatio * 0.5), digits);
-            if(bid >= lockThresh && curSL < lockSL - minStep) trade.PositionModify(ticket, lockSL, curTP);
-         }
-
-         // Trailing Stop
-         if(UseTrailingStop) {
-            double newSL = NormalizeDouble(bid - trailDist, digits);
-            if(newSL > curSL + minStep && newSL < bid)
-               trade.PositionModify(ticket, newSL, curTP);
-         }
-      }
-      else if(posInfo.PositionType() == POSITION_TYPE_SELL) {
-         double profitPts = (openPrice - ask) / symbolInfo.Point();
-         double beDist    = UseBreakEven ? (atrValue * BreakEvenATR) :
-                            (UseAdvancedBreakeven ? (BreakevenBufferPips * symbolInfo.Point()) : 0);
-
-         // [v5] Phantom SL guard
-         if(curSL > 0 && ask > curSL) {
-            trade.PositionClose(ticket);
-            continue;
-         }
-
-         // BreakEven
-         if((UseBreakEven || UseAdvancedBreakeven) && ask < openPrice - beDist &&
-            (curSL > openPrice || curSL == 0)) {
-            double newSL = NormalizeDouble(openPrice - BreakevenBufferPips * symbolInfo.Point(), digits);
-            if(curSL == 0 || newSL < curSL - minStep) trade.PositionModify(ticket, newSL, curTP);
-         }
-
-         // TP1 Partial
-         double tp1_pts = slDist / symbolInfo.Point() * TP1_Ratio;
-         if(UsePartialProfit && profitPts >= tp1_pts && !IsTP1AlreadyExecuted(ticket)) {
-            double volClose = NormalizeDouble(volume * TP1_ClosePercent / 100.0, 2);
-            if(volClose > 0) ClosePartialPosition(ticket, volClose);
-         }
-
-         // Profit Lock
-         if(UseProfitLock) {
-            double lockThresh = openPrice - slDist * ProfitLockRatio;
-            double lockSL     = NormalizeDouble(openPrice - slDist * (ProfitLockRatio * 0.5), digits);
-            if(ask <= lockThresh && (curSL > lockSL + minStep || curSL == 0)) trade.PositionModify(ticket, lockSL, curTP);
-         }
-
-         // Trailing Stop
-         if(UseTrailingStop) {
-            double newSL = NormalizeDouble(ask + trailDist, digits);
-            if((newSL < curSL - minStep || curSL == 0) && newSL > ask)
-               trade.PositionModify(ticket, newSL, curTP);
-         }
-      }
-   }
-}
-
-//==========================================================================
-//  CalculateLotSize — [v5] Kelly-adjusted with DD scaling
-//==========================================================================
-double CalculateLotSize(double slDistance)
-{
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   double riskPct = RiskPercent;
-
-   // Aggressive growth scaling
-   if(UseAggressiveGrowth && equity > dailyStartBalance && dailyStartBalance > 0) {
-      double profitFactor = (equity - dailyStartBalance) / dailyStartBalance;
-      riskPct += profitFactor * 6.0 * GrowthMultiplier;
-      if(riskPct > 8.0) riskPct = 8.0;
-   }
-
-   // [v5] Drawdown scaling — reduce risk when in drawdown
-   if(peakEquity > 0) {
-      double ddPct = (peakEquity - equity) / peakEquity * 100.0;
-      if(ddPct > 5.0)  riskPct *= 0.75;  // 5%+ DD → reduce lot 25%
-      if(ddPct > 10.0) riskPct *= 0.50;  // 10%+ DD → reduce lot 50%
-      if(ddPct > 15.0) riskPct *= 0.25;  // 15%+ DD → very conservative
-   }
-
-   // [v5] Consecutive loss scaling
-   if(consecutiveLosses >= 2) riskPct *= 0.70;
-
-   double riskAmt  = balance * (riskPct / 100.0);
-   double tickVal  = symbolInfo.TickValue();
-   double tickSize = symbolInfo.TickSize();
-
-   if(slDistance <= 0 || tickVal <= 0 || tickSize <= 0) return MinLot;
-
-   double slTicks = slDistance / tickSize;
-   double lotSize = riskAmt / (slTicks * tickVal);
-   double lotStep = symbolInfo.LotsStep();
-
-   lotSize = MathFloor(lotSize / lotStep) * lotStep;
-   lotSize = MathMax(MinLot, MathMin(MaxLot, lotSize));
-   return NormalizeDouble(lotSize, 2);
-}
-
-//==========================================================================
-//  [v6] CHECK SAFETY LIMITS - NO HARD HALTS
-//  ─────────────────────────────────────────────────────────────────────
-//  Instead of halting the bot, we transition to defensive monitoring:
-//  - Continue learning from market conditions
-//  - Reduce position sizes significantly
-//  - Increase entry confidence thresholds
-//  - Never stop the cognitive memory system
-//==========================================================================
-bool CheckSafetyLimits()
-{
-   // [v6] Removed hard halt check - bot never fully stops due to limits
-   
-   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   double pnlPerc = (dailyStartBalance > 0) ?
-                    ((equity - dailyStartBalance) / dailyStartBalance) * 100.0 : 0;
-
-   // [v6] Dynamic loss threshold - transition to defensive mode instead of halt
-   if(pnlPerc <= -MaxDailyLossPerc) {
-      // Don't halt - transition to defensive monitoring
-      if(currentTradingState != STATE_DEFENSIVE_MONITORING) {
-         currentTradingState = STATE_DEFENSIVE_MONITORING;
-         string msg = StringFormat("⚠️ **DAILY LOSS THRESHOLD**\nP&L: %.2f%%\nEntering DEFENSIVE MONITORING mode.\nContinuing cognitive learning...", pnlPerc);
-         if(NotifyOnRiskEvent) SendDiscord(msg);
-         if(PushNotifyOnTrade) SendNotification(msg);
-         Alert("[GoldHunter v6] ⚠️ Daily loss threshold reached. Entering defensive monitoring.");
-         Print("[GoldHunter v6] Defensive Mode Activated: Continuing to learn from market without hard halt.");
-      }
-      lastSignal = "🛡️ DEFENSIVE - Learning";
-      // Still allow trading but with reduced size and higher confidence
-      return true;  // Continue processing
-   }
-
-   // [v6] Dynamic profit threshold - scale back but don't halt
-   if(pnlPerc >= MaxDailyProfitPerc) {
-      // Scale back position sizes but continue monitoring
-      if(currentTradingState == STATE_DEFENSIVE_MONITORING) {
-         currentTradingState = STATE_RUNNING;  // Return to normal
-         string msg = StringFormat("✅ **PROFIT TARGET EXCEEDED**\nP&L: +%.2f%%\nReturning to normal operation.", pnlPerc);
-         if(NotifyOnRiskEvent) SendDiscord(msg);
-         if(PushNotifyOnTrade) SendNotification(msg);
-         Alert("[GoldHunter v6] ✅ Profit target exceeded. Resuming normal operations.");
-      }
-      lastSignal = "🎯 PROFITABLE - Scaling Back";
-      return true;  // Continue processing
-   }
-
-   // Reset to running state if within safe bounds
-   if(currentTradingState == STATE_DEFENSIVE_MONITORING && pnlPerc > -MaxDailyLossPerc * 0.5) {
-      currentTradingState = STATE_RUNNING;
-      Print("[GoldHunter v6] P&L recovered. Returning to normal operation.");
-   }
-
-   // [v5] MaxTradesPerDay is now advisory only — log but don't block
-   if(tradesThisDay >= MaxTradesPerDay) {
-      LogStatus(StringFormat("Note: Trades today (%d) exceed advisory limit (%d) — continuing",
-                             tradesThisDay, MaxTradesPerDay));
-   }
-
-   return true;  // Always allow processing in v6
-}
-
-//==========================================================================
-//  [v5] ADAPTIVE CIRCUIT BREAKER
-//  ─────────────────────────────────────────────────────────────────────
-//  แทนที่ "3 ไม้ = 30 นาที" ด้วยระบบที่วิเคราะห์ว่า "ทำไมถึงแพ้"
-//  แล้วปรับระยะพักตามสภาพตลาดจริง:
-//
-//  TRIGGER CONDITIONS (ตรวจทุกอย่างพร้อมกัน):
-//    T1: Consecutive losses >= CB_MaxConsecLosses
-//    T2: Session loss >= CB_LossPctTrigger% ของ balance
-//    T3: Equity drop >= CB_EquityDDTrigger% จาก session peak
-//
-//  PAUSE DURATION FORMULA:
-//    base_minutes = ATR_bars_to_recover × bar_duration_minutes
-//    severity_multiplier = 1.0 + (loss_severity_score × 0.5)
-//    smart_pause = CLAMP(base × severity, CB_Min, CB_Max)
-//
-//  โดย:
-//    ATR_bars_to_recover = total_loss_pts / atrValue_pts  (เวลาตลาดต้องใช้ฟื้น)
-//    loss_severity_score = 0..3 (นับจากกี่ trigger ที่ยิงพร้อมกัน)
-//    bar_duration = นาทีต่อแท่งของ timeframe ปัจจุบัน
-//
-//  ผลลัพธ์:
-//    - ตลาด volatile + แพ้หนัก → พักนาน (เข้าใกล้ CB_Max)
-//    - ตลาด calm + แพ้เล็กน้อย → พักสั้น (เข้าใกล้ CB_Min)
-//    - เปลี่ยน strategy หลังพักโดยอัตโนมัติ
-//==========================================================================
-void CheckConsecutiveLossCB()
-{
-   if(!UseAdaptiveCB) return;
-   if(cbPauseUntil > 0) return; // already paused
-
-   double balance     = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity      = AccountInfoDouble(ACCOUNT_EQUITY);
-   double sessionLoss = dailyStartBalance - balance; // positive = loss
-
-   bool t1_consecLoss = (consecutiveLosses >= CB_MaxConsecLosses);
-   bool t2_sessionLoss= (balance > 0 && sessionLoss / balance * 100.0 >= CB_LossPctTrigger);
-   bool t3_equityDD   = (sessionPeakEquity > 0 &&
-                         (sessionPeakEquity - equity) / sessionPeakEquity * 100.0 >= CB_EquityDDTrigger);
-
-   if(!t1_consecLoss && !t2_sessionLoss && !t3_equityDD) return;
-
-   //--- Count how many triggers fired → severity 0-3
-   int severity = 0;
-   string reasons = "";
-   if(t1_consecLoss) {
-      severity++;
-      reasons += StringFormat("🔴 %d consecutive losses", consecutiveLosses);
-   }
-   if(t2_sessionLoss) {
-      severity++;
-      double lossPct = sessionLoss / balance * 100.0;
-      reasons += (reasons == "" ? "" : " + ");
-      reasons += StringFormat("🔴 Session loss %.1f%%", lossPct);
-   }
-   if(t3_equityDD) {
-      severity++;
-      double ddPct = (sessionPeakEquity - equity) / sessionPeakEquity * 100.0;
-      reasons += (reasons == "" ? "" : " + ");
-      reasons += StringFormat("🔴 Equity DD %.1f%%", ddPct);
-   }
-
-   //--- Calculate how many ATR-lengths the market needs to recover
-   //    = total_session_loss_in_points / current_ATR_in_points
-   double atrPts = (atrValue > 0) ? atrValue / symbolInfo.Point() : 150.0;
-   double lossInPoints = 0;
-   if(balance > 0 && sessionLoss > 0) {
-      double tickVal  = symbolInfo.TickValue();
-      double tickSize = symbolInfo.TickSize();
-      double lastLot  = MathMax(MinLot, MinLot); // conservative estimate
-      // recover in points = loss amount / (tickVal per point per lot * lot)
-      // simplified: use ATR-multiples of loss
-      lossInPoints = sessionLoss / (balance * 0.01) * atrPts; // scaled estimate
-   }
-
-   double atrBarsToRecover = MathMax(1.0, lossInPoints / MathMax(atrPts, 1.0));
-   atrBarsToRecover = MathMin(atrBarsToRecover, 20.0); // cap at 20 bars
-
-   //--- Bar duration in minutes for current timeframe
-   int barMinutes = 1;
-   switch(Period()) {
-      case PERIOD_M1:  barMinutes = 1;   break;
-      case PERIOD_M5:  barMinutes = 5;   break;
-      case PERIOD_M15: barMinutes = 15;  break;
-      case PERIOD_M30: barMinutes = 30;  break;
-      case PERIOD_H1:  barMinutes = 60;  break;
-      case PERIOD_H4:  barMinutes = 240; break;
-      default:         barMinutes = 1;   break;
-   }
-
-   //--- Base pause = ATR bars to recover × bar duration
-   double basePause = atrBarsToRecover * barMinutes;
-
-   //--- Severity multiplier: each additional trigger adds 50% more
-   double severityMult = 1.0 + (severity - 1) * 0.5;
-
-   //--- Volatility factor: high ATR expansion = market is wild → pause longer
-   double volFactor = 1.0;
-   if(prevAtrValue > 0 && atrValue > 0) {
-      double atrExpansion = atrValue / prevAtrValue;
-      if(atrExpansion > 1.5)      volFactor = 1.5; // volatile → 50% longer
-      else if(atrExpansion > 1.2) volFactor = 1.2;
-      else if(atrExpansion < 0.8) volFactor = 0.7; // calming down → shorter
-   }
-
-   //--- Session factor: during high-volume overlap, markets resolve faster
-   double sessFactor = 1.0;
-   string sess = GetCurrentSessionName();
-   if(sess == "LONDON+NY") sessFactor = 0.8; // overlap = liquidity resolves fast
-   else if(sess == "ASIAN")sessFactor = 1.3; // thin = stay out longer
-
-   //--- Final smart pause
-   double smartPause = basePause * severityMult * volFactor * sessFactor;
-   int pauseMinutes  = (int)MathRound(MathMax(CB_MinPauseMinutes,
-                                      MathMin(CB_MaxPauseMinutes, smartPause)));
-
-   cbPauseUntil      = TimeCurrent() + pauseMinutes * 60;
-   cbTriggerReason   = reasons;
-   cbPauseMinutesLast= pauseMinutes;
-
-   //--- After pause, force re-evaluation of strategy
-   //    (stored in currentStrategy — will be recomputed on resume naturally)
-
-   string msg = StringFormat(
-      "⚠️ **ADAPTIVE CIRCUIT BREAKER**\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "Triggers: %s\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "📐 **Pause Calculation:**\n"
-      "  ATR bars to recover: `%.1f bars`\n"
-      "  Bar duration: `%d min/bar`\n"
-      "  Base pause: `%.0f min`\n"
-      "  Severity (x%d triggers): `×%.1f`\n"
-      "  Volatility factor: `×%.1f`\n"
-      "  Session factor (%s): `×%.1f`\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "⏱️ **Smart Pause: `%d minutes`**\n"
-      "Resumes: `%s`\n"
-      "Balance: `$%.2f` | Equity: `$%.2f`",
-      reasons,
-      atrBarsToRecover, barMinutes, basePause,
-      severity, severityMult,
-      volFactor,
-      sess, sessFactor,
-      pauseMinutes,
-      TimeToString(cbPauseUntil, TIME_DATE|TIME_MINUTES),
-      balance, equity);
-
-   if(NotifyOnRiskEvent) SendDiscord(msg);
-   if(PushNotifyOnTrade) SendNotification(StringFormat(
-      "GHP5 ADAPTIVE CB | %s | Pause: %d min | Resume: %s",
-      reasons, pauseMinutes,
-      TimeToString(cbPauseUntil, TIME_MINUTES)));
-   Alert(StringFormat("[GoldHunter v5] Adaptive CB: %s\nPause: %d min (smart calc)",
-                      reasons, pauseMinutes));
-
-   LogStatus(StringFormat("AdaptiveCB: base=%.0f sev=%.1f vol=%.1f sess=%.1f → %dmin",
-                          basePause, severityMult, volFactor, sessFactor, pauseMinutes));
-}
-
-//==========================================================================
-//  Session Filter
-//==========================================================================
-bool IsActiveSession()
-{
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   double t   = dt.hour + dt.min / 60.0;
-   double buf = SessionBuffer_Min / 60.0;
-
-   bool london = TradeLondonSession && (t >= 7.0 - buf  && t <= 16.0 + buf);
-   bool ny     = TradeNYSession     && (t >= 13.0 - buf && t <= 22.0 + buf);
-   bool asian  = TradeAsianSession  && (t < 7.0          || t >= 23.0);
-
-   return london || ny || asian;
-}
-
-string GetCurrentSessionName()
-{
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   double t = dt.hour + dt.min / 60.0;
-
-   if(t >= 13.0 && t < 16.0) return "LONDON+NY";
-   if(t >= 7.0  && t < 13.0) return "LONDON";
-   if(t >= 16.0 && t < 22.0) return "NY";
-   if(t >= 23.0 || t < 7.0)  return "ASIAN";
-   return "OFF";
-}
-
-//==========================================================================
-//  New Day Reset
-//==========================================================================
-void CheckNewDay()
-{
-   datetime todayStart = iTime(Symbol(), PERIOD_D1, 0);
-   if(todayStart == currentDay) return;
-
-   if(NotifyOnDailyReport || PushNotifyOnDaily)
-      SendDiscordExtendedReport();
-
-   currentDay        = todayStart;
-   tradesThisDay     = 0;
-   tradingHalted     = false;  // [v6] Deprecated but kept for compatibility
-   currentTradingState = STATE_RUNNING;  // [v6] Reset to running state
-   dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   winCount          = 0;
-   lossCount         = 0;
-   londonWins=0; londonLosses=0; nyWins=0; nyLosses=0; asianWins=0; asianLosses=0;
-   londonPnL=0; nyPnL=0; asianPnL=0;
-   consecutiveLosses = 0;
-   cbPauseUntil      = 0;
-
-   ArrayResize(tp1ExecutedTickets, 0);
-   tp1ExecutedCount = 0;
-}
-
-//==========================================================================
-//  [v5] Weekly Summary
-//==========================================================================
-void CheckWeeklyReport()
-{
-   datetime weekStart = iTime(Symbol(), PERIOD_W1, 0);
-   if(weekStart == currentWeek) return;
-
-   if(NotifyOnDailyReport) {
-      double weekPnL    = AccountInfoDouble(ACCOUNT_BALANCE) - weeklyStartBalance;
-      double weekPnLPct = (weeklyStartBalance > 0) ? weekPnL / weeklyStartBalance * 100.0 : 0;
-
-      SendDiscord(StringFormat(
-         "📅 **WEEKLY SUMMARY — GoldHunter v5**\n"
-         "Week: `%s`\n"
-         "💵 Week P&L: `%s$%.2f` (`%+.2f%%`)\n"
-         "💰 Balance: `$%.2f`\n"
-         "📈 Peak Equity: `$%.2f`\n"
-         "📉 Max Drawdown: `%.2f%%`\n"
-         "🏆 Max Win Streak: `%d`\n"
-         "😓 Max Loss Streak: `%d`",
-         TimeToString(TimeCurrent(), TIME_DATE),
-         (weekPnL >= 0 ? "+" : "-"), MathAbs(weekPnL), weekPnLPct,
-         AccountInfoDouble(ACCOUNT_BALANCE),
-         peakEquity, maxDrawdownPct,
-         maxWinStreak, maxLossStreak));
-   }
-
-   currentWeek        = weekStart;
-   weeklyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   maxDrawdownPct     = 0;
-   maxWinStreak       = 0;
-   maxLossStreak      = 0;
-}
-
-//==========================================================================
-//  OnTradeTransaction
-//==========================================================================
-void OnTradeTransaction(const MqlTradeTransaction &trans,
-                        const MqlTradeRequest     &request,
-                        const MqlTradeResult      &result)
-{
-   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
-   if(!HistoryDealSelect(trans.deal)) return;
-   if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != EA_MAGIC_NUMBER) return;
-
-   string dealSym = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
-   if(dealSym != Symbol()) return;
-
-   ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
-   ENUM_DEAL_TYPE  dealType  = (ENUM_DEAL_TYPE) HistoryDealGetInteger(trans.deal, DEAL_TYPE);
-
-   double grossProfit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
-   double swap        = HistoryDealGetDouble(trans.deal, DEAL_SWAP);
-   double commission  = HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
-   double netProfit   = grossProfit + swap + commission;
-   double dealPrice   = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
-   double dealVol     = HistoryDealGetDouble(trans.deal, DEAL_VOLUME);
-   ulong  posId       = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
-   double curBalance  = AccountInfoDouble(ACCOUNT_BALANCE);
-
-   bool isClose = (dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT);
-
-   if(isClose || netProfit != 0.0) {
-      totalProfit += netProfit;
-
-      // [v5] Update streaks and session stats
-      string sess = GetCurrentSessionName();
-      if(netProfit > 0) {
-         winCount++;
-         winStreak++;
-         lossStreak = 0;
-         consecutiveLosses = 0;
-         if(winStreak > maxWinStreak) maxWinStreak = winStreak;
-         if(sess == "LONDON" || sess == "LONDON+NY") { londonWins++;  londonPnL += netProfit; }
-         else if(sess == "NY")                       { nyWins++;      nyPnL     += netProfit; }
-         else                                        { asianWins++;   asianPnL  += netProfit; }
-      } else if(netProfit < 0) {
-         lossCount++;
-         lossStreak++;
-         winStreak = 0;
-         consecutiveLosses++;
-         if(lossStreak > maxLossStreak) maxLossStreak = lossStreak;
-         if(sess == "LONDON" || sess == "LONDON+NY") { londonLosses++; londonPnL += netProfit; }
-         else if(sess == "NY")                       { nyLosses++;     nyPnL     += netProfit; }
-         else                                        { asianLosses++;  asianPnL  += netProfit; }
-      }
-
-      CheckConsecutiveLossCB();
-
-      SendPnLAlert(DealEntryToString(dealEntry), grossProfit, netProfit,
-                   curBalance, dealSym, posId, dealVol);
-
-      if(NotifyOnTrade) {
-         string icon = (netProfit >= 0) ? "✅" : "❌";
-         int    wr   = (winCount + lossCount > 0) ? (int)(winCount * 100.0 / (winCount + lossCount)) : 0;
-         SendDiscord(StringFormat(
-            "%s **TRADE CLOSED** [v5]\n"
-            "Symbol: `%s` | #%d\n"
-            "Type: `%s` | Vol: `%.2f`\n"
-            "Close Price: `%.5f`\n"
-            "Gross P&L: `%s$%.2f`\n"
-            "Swap: `%+.2f`  Comm: `%+.2f`\n"
-            "🔑 **Net P&L: `%s$%.2f`**\n"
-            "💰 Balance: `$%.2f`\n"
-            "📊 W:%d L:%d WR:%d%% | Streak: %s%d | CB: %d/%d",
-            icon, dealSym, (int)posId,
-            DealTypeToString(dealType), dealVol,
-            dealPrice,
-            (grossProfit >= 0 ? "+" : "-"), MathAbs(grossProfit),
-            swap, commission,
-            (netProfit >= 0 ? "+" : "-"), MathAbs(netProfit),
-            curBalance, winCount, lossCount, wr,
-            (netProfit > 0 ? "🏆" : "💔"), (netProfit > 0 ? winStreak : lossStreak),
-            consecutiveLosses, MaxConsecutiveLosses));
-      }
-   }
-}
-
-//==========================================================================
-//  [v5] SendDiscordExtendedReport — Daily + Session Breakdown
-//==========================================================================
-void SendDiscordExtendedReport()
-{
-   if(!NotifyOnDailyReport) return;
-
-   double finalBal = AccountInfoDouble(ACCOUNT_BALANCE);
-   double dayPnL   = finalBal - dailyStartBalance;
-   double dayPnLPct= (dailyStartBalance > 0) ? dayPnL / dailyStartBalance * 100.0 : 0;
-   int    wr       = (winCount + lossCount > 0) ?
-                     (int)(winCount * 100.0 / (winCount + lossCount)) : 0;
-
-   // London WR
-   int londonTotal = londonWins + londonLosses;
-   int nyTotal     = nyWins + nyLosses;
-   int asianTotal  = asianWins + asianLosses;
-   int lwrPct      = londonTotal > 0 ? (int)(londonWins * 100.0 / londonTotal) : 0;
-   int nywrPct     = nyTotal     > 0 ? (int)(nyWins     * 100.0 / nyTotal)     : 0;
-   int aswrPct     = asianTotal  > 0 ? (int)(asianWins  * 100.0 / asianTotal)  : 0;
-
-   SendDiscord(StringFormat(
-      "📋 **DAILY REPORT — GoldHunter v5 — %s**\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "📊 Trades: `%d` (Advisory max: %d)\n"
-      "✅ Win: `%d`  ❌ Loss: `%d`  WR: `%d%%`\n"
-      "🏆 Win Streak: `%d`  😓 Loss Streak: `%d`\n"
-      "💵 Day P&L: `%s$%.2f` (`%+.2f%%`)\n"
-      "💰 Balance: `$%.2f`\n"
-      "📉 Max DD Today: `%.2f%%`\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "🇬🇧 London: W%d/L%d WR:%d%% P&L:`%+.2f`\n"
-      "🇺🇸 New York: W%d/L%d WR:%d%% P&L:`%+.2f`\n"
-      "🌏 Asian: W%d/L%d WR:%d%% P&L:`%+.2f`\n"
-      "━━━━━━━━━━━━━━━━━━━━",
-      TimeToString(TimeCurrent(), TIME_DATE),
-      tradesThisDay, MaxTradesPerDay,
-      winCount, lossCount, wr,
-      maxWinStreak, maxLossStreak,
-      (dayPnL >= 0 ? "+" : "-"), MathAbs(dayPnL), dayPnLPct,
-      finalBal, maxDrawdownPct,
-      londonWins, londonLosses, lwrPct, londonPnL,
-      nyWins, nyLosses, nywrPct, nyPnL,
-      asianWins, asianLosses, aswrPct, asianPnL));
-
-   if(PushNotifyOnDaily)
-      SendNotification(StringFormat("GHP5 Daily | P&L:%+.2f%%($%+.2f) | W:%d L:%d WR:%d%% | Bal:$%.2f",
-                                    dayPnLPct, dayPnL, winCount, lossCount, wr, finalBal));
-}
-
-//==========================================================================
-//  SendPnLAlert
-//==========================================================================
-void SendPnLAlert(string action, double grossProfit, double netProfit,
-                  double balance, string sym, ulong posId, double lots)
-{
-   string pnlSign = (netProfit >= 0) ? "+" : "";
-   string icon    = (netProfit >= 0) ? "✅ PROFIT" : "❌ LOSS";
-   double dayPnL  = balance - dailyStartBalance;
-
-   string alertMsg = StringFormat(
-      "[GoldHunter v5] %s\n"
-      "Symbol: %s  |  #%d  |  %.2f lot\n"
-      "Entry: %s\n"
-      "Gross P&L: %s$%.2f\n"
-      "Net P&L (inc swap+comm): %s$%.2f\n"
-      "─────────────────\n"
-      "Balance: $%.2f\n"
-      "Day P&L: %s$%.2f  |  W:%d  L:%d\n"
-      "Streak: %s | CB: %d/%d",
-      icon, sym, (int)posId, lots, action,
-      (grossProfit >= 0 ? "+" : "-"), MathAbs(grossProfit),
-      pnlSign, MathAbs(netProfit),
-      balance,
-      (dayPnL >= 0 ? "+" : "-"), MathAbs(dayPnL),
-      winCount, lossCount,
-      (netProfit > 0 ? StringFormat("Win x%d", winStreak) : StringFormat("Loss x%d", lossStreak)),
-      consecutiveLosses, MaxConsecutiveLosses);
-
-   if(AlertOnTradeClose) Alert(alertMsg);
-
-   if(PushNotifyOnTrade)
-      SendNotification(StringFormat("GHP5 %s | Net:%s%.2f | Bal:$%.2f | W:%d L:%d",
-                                    (netProfit >= 0 ? "WIN" : "LOSS"),
-                                    pnlSign, MathAbs(netProfit),
-                                    balance, winCount, lossCount));
-}
-
-//==========================================================================
-//  Discord Helpers
-//==========================================================================
-string JsonEscape(string v)
-{
-   StringReplace(v, "\\", "\\\\"); StringReplace(v, "\"", "\\\"");
-   StringReplace(v, "\r", "\\r");  StringReplace(v, "\n", "\\n");
-   StringReplace(v, "\t", "\\t");
-   return v;
-}
-
-string DealTypeToString(ENUM_DEAL_TYPE t)
-{
-   if(t == DEAL_TYPE_BUY)  return "BUY";
-   if(t == DEAL_TYPE_SELL) return "SELL";
-   return "OTHER";
-}
-
-string DealEntryToString(ENUM_DEAL_ENTRY e)
-{
-   if(e == DEAL_ENTRY_IN)     return "OPEN";
-   if(e == DEAL_ENTRY_OUT)    return "CLOSE";
-   if(e == DEAL_ENTRY_INOUT)  return "REVERSE";
-   if(e == DEAL_ENTRY_OUT_BY) return "CLOSE_BY";
-   return "UNKNOWN";
-}
-
-string DeinitReasonToString(const int r)
-{
-   switch(r) {
-      case REASON_PROGRAM:     return "Program removed";
-      case REASON_REMOVE:      return "EA removed from chart";
-      case REASON_RECOMPILE:   return "EA recompiled";
-      case REASON_CHARTCHANGE: return "Symbol/period changed";
-      case REASON_CHARTCLOSE:  return "Chart closed";
-      case REASON_PARAMETERS:  return "Input parameters changed";
-      case REASON_ACCOUNT:     return "Account changed";
-      case REASON_TEMPLATE:    return "Template changed";
-      case REASON_INITFAILED:  return "Initialization failed";
-      case REASON_CLOSE:       return "Terminal closed";
-   }
-   return "Unknown";
-}
-
-string RetcodeToString(uint rc)
-{
-   switch(rc) {
-      case TRADE_RETCODE_REQUOTE:        return "Requote";
-      case TRADE_RETCODE_REJECT:         return "Rejected";
-      case TRADE_RETCODE_CANCEL:         return "Cancelled";
-      case TRADE_RETCODE_PLACED:         return "Order placed";
-      case TRADE_RETCODE_DONE:           return "Done";
-      case TRADE_RETCODE_DONE_PARTIAL:   return "Done partial";
-      case TRADE_RETCODE_ERROR:          return "Error";
-      case TRADE_RETCODE_TIMEOUT:        return "Timeout";
-      case TRADE_RETCODE_INVALID:        return "Invalid";
-      case TRADE_RETCODE_INVALID_VOLUME: return "Invalid volume";
-      case TRADE_RETCODE_INVALID_PRICE:  return "Invalid price";
-      case TRADE_RETCODE_INVALID_STOPS:  return "Invalid SL/TP";
-      case TRADE_RETCODE_TRADE_DISABLED: return "Trade disabled";
-      case TRADE_RETCODE_MARKET_CLOSED:  return "Market closed";
-      case TRADE_RETCODE_NO_MONEY:       return "Insufficient funds";
-      case TRADE_RETCODE_PRICE_OFF:      return "Price off";
-      case TRADE_RETCODE_INVALID_EXPIRATION: return "Invalid expiration";
-      case TRADE_RETCODE_ORDER_CHANGED:  return "Order changed";
-      case TRADE_RETCODE_TOO_MANY_REQUESTS: return "Too many requests";
-      case TRADE_RETCODE_NO_CHANGES:     return "No changes";
-      case TRADE_RETCODE_SERVER_DISABLES_AT: return "Server disabled AT";
-      case TRADE_RETCODE_CLIENT_DISABLES_AT: return "Client disabled AT";
-      case TRADE_RETCODE_LOCKED:         return "Order locked";
-      case TRADE_RETCODE_FROZEN:         return "Order frozen";
-      case TRADE_RETCODE_INVALID_FILL:   return "Invalid fill type";
-      case TRADE_RETCODE_CONNECTION:     return "No connection";
-      case TRADE_RETCODE_ONLY_REAL:      return "Real account only";
-      case TRADE_RETCODE_LIMIT_ORDERS:   return "Limit orders limit";
-      case TRADE_RETCODE_LIMIT_VOLUME:   return "Volume limit";
-      case TRADE_RETCODE_INVALID_ORDER:  return "Invalid order";
-      case TRADE_RETCODE_POSITION_CLOSED:return "Position closed";
-   }
-   return StringFormat("Code_%d", rc);
-}
-
-bool SendDiscord(string message)
-{
-   if(!UseDiscord || DiscordWebhookURL == "") {
-      if(!discordWarnShown) {
-         Print("GHP: Discord disabled or webhook empty.");
-         discordWarnShown = true;
-      }
-      return false;
-   }
-
-   string headers = "Content-Type: application/json\r\n";
-   string payload = "{\"username\":\"" + JsonEscape(DiscordBotName) +
-                    "\",\"content\":\"" + JsonEscape(message) + "\"}";
-
-   char post[]; int pLen = StringToCharArray(payload, post, 0, WHOLE_ARRAY, CP_UTF8);
-   if(pLen > 0) ArrayResize(post, pLen - 1);
-
-   char   resp[]; string respHdr;
-   ResetLastError();
-   int status = WebRequest("POST", DiscordWebhookURL, headers,
-                           DiscordTimeoutMS, post, resp, respHdr);
-
-   if(status == -1) {
-      int err = GetLastError();
-      if(TimeCurrent() - lastDiscordErrTime > 60) {
-         Print("GHP: Discord WebRequest failed. Error:", err,
-               ". Add discord.com to: Tools→Options→Expert Advisors→Allow WebRequest");
-         lastDiscordErrTime = TimeCurrent();
-      }
-      return false;
-   }
-   if(status < 200 || status >= 300) {
-      Print("GHP: Discord HTTP status: ", status);
-      return false;
-   }
-   return true;
-}
-
-void SendDiscordStartupReport()
-{
-   if(!NotifyOnBotState) return;
-   SendDiscord(StringFormat(
-      "💎 **GOLDHUNTER ULTIMATE v%s — XM EDITION**\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "Account: `%d` | Broker: `%s`\n"
-      "Symbol: `%s` | TF: `%s`\n"
-      "Balance: `$%.2f` | Equity: `$%.2f`\n"
-      "Strategy: `%s` | Risk: `%.1f%%`\n"
-      "━━━━━━━━━━━━━━━━━━━━\n"
-      "🆕 v5 Features Active:\n"
-      "✅ Triple-TF Confluence (M1+M5+H1)\n"
-      "✅ Candle-Close Entry Gate\n"
-      "✅ Dynamic Confidence: `%.0f%%` base\n"
-      "✅ Circuit Breaker: %d losses → %dmin pause\n"
-      "✅ MaxTradesPerDay: STATS ONLY (no hard block)\n"
-      "✅ Session P&L Breakdown in Daily Report\n"
-      "Status: `%s`",
-      EA_VERSION,
-      (int)AccountInfoInteger(ACCOUNT_LOGIN),
-      AccountInfoString(ACCOUNT_COMPANY),
-      Symbol(), EnumToString((ENUM_TIMEFRAMES)Period()),
-      AccountInfoDouble(ACCOUNT_BALANCE),
-      AccountInfoDouble(ACCOUNT_EQUITY),
-      stratNames[StrategyMode], RiskPercent,
-      MinConfidence,
-      MaxConsecutiveLosses, CBPauseMinutes,
-      GetBotRuntimeStatus()));
-}
-
-void SendDiscordShutdownReport(const int reason)
-{
-   if(!NotifyOnBotState) return;
-   SendDiscord(StringFormat(
-      "🛑 **GOLDHUNTER v%s TERMINATED**\n"
-      "Reason: `%s`\n"
-      "W: %d | L: %d | Total Net P&L: `%s$%.2f`\n"
-      "Balance: `$%.2f`\n"
-      "Max DD: `%.2f%%` | Max Win Streak: `%d` | Max Loss Streak: `%d`",
-      EA_VERSION, DeinitReasonToString(reason),
-      winCount, lossCount,
-      (totalProfit >= 0 ? "+" : "-"), MathAbs(totalProfit),
-      AccountInfoDouble(ACCOUNT_BALANCE),
-      maxDrawdownPct, maxWinStreak, maxLossStreak));
-}
-
-void SendDiscordBotStateReport(string state, string detail)
-{
-   SendDiscord(StringFormat(
-      "🔘 **BOT STATE: %s**\n%s\n"
-      "Symbol: `%s` | Time: `%s`\n"
-      "Balance: `$%.2f` | Equity: `$%.2f`",
-      state, detail, Symbol(),
-      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
-      AccountInfoDouble(ACCOUNT_BALANCE),
-      AccountInfoDouble(ACCOUNT_EQUITY)));
-}
-
-//==========================================================================
-//  LogStatus
-//==========================================================================
-void LogStatus(string message)
-{
-   if(!ShowDebugLog) return;
-   static string lastLog = "";
-   if(message == lastLog) return;
-   Print("GHP_LOG: ", message);
-   lastLog = message;
-}
-
-//==========================================================================
-//  Dashboard
-//==========================================================================
-void CreateLabel(string name, int x, int y, string text, color clr, int sz)
-{
-   ObjectCreate(ChartID(), name, OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(ChartID(), name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(ChartID(), name, OBJPROP_YDISTANCE, y);
-   ObjectSetString(ChartID(),  name, OBJPROP_TEXT,      text);
-   ObjectSetInteger(ChartID(), name, OBJPROP_COLOR,     clr);
-   ObjectSetInteger(ChartID(), name, OBJPROP_FONTSIZE,  sz);
-   ObjectSetString(ChartID(),  name, OBJPROP_FONT,      "Arial Bold");
-   ObjectSetInteger(ChartID(), name, OBJPROP_BACK,      false);
-   ObjectSetInteger(ChartID(), name, OBJPROP_SELECTABLE,false);
-}
-
-void CreateDashboard()
-{
-   string p = "GHP_";
-   int x=10, y=30, w=300, h=390;
-
-   ObjectCreate(ChartID(), p+"bg", OBJ_RECTANGLE_LABEL, 0, 0, 0);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_XDISTANCE,  x);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_YDISTANCE,  y);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_XSIZE,      w);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_YSIZE,      h);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_BGCOLOR,    PanelColor);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_BORDER_TYPE,BORDER_FLAT);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_COLOR,      clrDimGray);
-   ObjectSetInteger(ChartID(), p+"bg", OBJPROP_BACK,       false);
-
-   CreateLabel(p+"title",   x+10, y+8,   "💎 GoldHunter UHF AGI v5.0 (XM)", clrGold,      10);
-   CreateLabel(p+"sep1",    x+10, y+26,  "──────────────────────────────",   clrDimGray,   7);
-   CreateLabel(p+"strat",   x+10, y+38,  "Strategy: AUTO-AI",                 clrYellow,    9);
-   CreateLabel(p+"signal",  x+10, y+56,  "Signal: SCANNING...",               TextColor,    9);
-   CreateLabel(p+"sep2",    x+10, y+74,  "──────────────────────────────",   clrDimGray,   7);
-   CreateLabel(p+"bal",     x+10, y+88,  "Balance:  $0.00",                   TextColor,    9);
-   CreateLabel(p+"eq",      x+10, y+106, "Equity:   $0.00",                   TextColor,    9);
-   CreateLabel(p+"pnl",     x+10, y+124, "Day P&L:  $0.00",                   TextColor,    9);
-   CreateLabel(p+"float",   x+10, y+142, "Float P&L: $0.00",                  TextColor,    9);
-   CreateLabel(p+"sep3",    x+10, y+160, "──────────────────────────────",   clrDimGray,   7);
-   CreateLabel(p+"rsi",     x+10, y+174, "RSI: 0.00",                         TextColor,    9);
-   CreateLabel(p+"atr",     x+10, y+192, "ATR: 0.00",                         TextColor,    9);
-   CreateLabel(p+"adx",     x+10, y+210, "ADX: 0.00",                         TextColor,    9);
-   CreateLabel(p+"regime",  x+10, y+228, "Regime: SCANNING",                  clrCyan,      9);
-   CreateLabel(p+"sep4",    x+10, y+246, "──────────────────────────────",   clrDimGray,   7);
-   CreateLabel(p+"trades",  x+10, y+260, "Today: 0 trades (no limit)",        TextColor,    9);
-   CreateLabel(p+"winrate", x+10, y+278, "Win: 0  Loss: 0  WR: 0%",           TextColor,    9);
-   CreateLabel(p+"streak",  x+10, y+296, "Streak: — | CB: 0/3",               TextColor,    9);
-   CreateLabel(p+"session", x+10, y+314, "Session: --",                        clrYellow,    9);
-   CreateLabel(p+"conf",    x+10, y+332, "Conf Threshold: 62%",                clrCyan,      9);
-   CreateLabel(p+"status",  x+10, y+350, "Status: RUNNING ✅",                clrLime,      9);
-   CreateLabel(p+"spread",  x+10, y+368, "Spread: --",                         TextColor,    8);
-   ChartRedraw(ChartID());
-}
-
-void UpdateDashboard()
-{
-   string p = "GHP_";
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   double dayPnL  = equity - dailyStartBalance;
-
-   double floatPnL = 0;
-   for(int i = PositionsTotal()-1; i >= 0; i--)
-      if(posInfo.SelectByIndex(i) && posInfo.Symbol()==Symbol() && posInfo.Magic()==EA_MAGIC_NUMBER)
-         floatPnL += posInfo.Profit() + posInfo.Swap();
-
-   int winRate = (winCount + lossCount > 0) ?
-                 (int)(winCount * 100.0 / (winCount + lossCount)) : 0;
-   double spread = (symbolInfo.Ask() - symbolInfo.Bid()) / symbolInfo.Point();
-
-   int regime = DetectMarketRegime();
-   string regStr;
-   color  regCol = clrCyan;
-   switch(regime) {
-      case 1: regStr = "📈 BULL TREND";  regCol = ProfitColor; break;
-      case 2: regStr = "📉 BEAR TREND";  regCol = LossColor;   break;
-      case 3: regStr = "↔️ RANGING";     regCol = clrYellow;   break;
-      case 4: regStr = "⚡ VOLATILE";    regCol = clrOrange;   break;
-      default: regStr= "💤 CALM";        regCol = clrCyan;     break;
-   }
-
-   string sessStr = GetCurrentSessionName();
-   if(!IsActiveSession()) sessStr = "OFF-HOURS";
-
-   string rts = GetBotRuntimeStatus();
-   string statusStr; color statusClr;
-   if(rts == "RUNNING")                  { statusStr = "Status: RUNNING ✅";         statusClr = clrLime;   }
-   else if(rts == "DEFENSIVE_MONITORING"){ statusStr = "Status: DEFENSIVE 🛡️";       statusClr = clrYellow; }
-   else if(rts == "CB_PAUSE")            { statusStr = "Status: CB PAUSE ⏸️";        statusClr = clrOrange; }
-   else if(rts == "PAUSED_MANUAL")       { statusStr = "Status: PAUSED ⏸️";          statusClr = clrOrange; }
-   else if(rts == "DISABLED_BY_INPUT")   { statusStr = "Status: OFF (Input) ⏸️";     statusClr = clrOrange; }
-   else                                  { statusStr = "Status: UNKNOWN ⚠️";         statusClr = clrGray;   }
-
-   string streakStr = StringFormat("%s x%d | CB: %d/%d",
-      winStreak > lossStreak ? "🏆" : "💔",
-      winStreak > lossStreak ? winStreak : lossStreak,
-      consecutiveLosses, MaxConsecutiveLosses);
-
-   double dynConf = GetDynamicMinConfidence();
-
-   ObjectSetString(ChartID(),  p+"strat",   OBJPROP_TEXT,  "Strategy: " + stratNames[currentStrategy]);
-   ObjectSetString(ChartID(),  p+"signal",  OBJPROP_TEXT,  "Signal: " + lastSignal);
-   ObjectSetString(ChartID(),  p+"bal",     OBJPROP_TEXT,  StringFormat("Balance:  $%.2f", balance));
-   ObjectSetString(ChartID(),  p+"eq",      OBJPROP_TEXT,  StringFormat("Equity:   $%.2f", equity));
-   ObjectSetString(ChartID(),  p+"pnl",     OBJPROP_TEXT,  StringFormat("Day P&L:  %+.2f", dayPnL));
-   ObjectSetInteger(ChartID(), p+"pnl",     OBJPROP_COLOR, (dayPnL >= 0) ? ProfitColor : LossColor);
-   ObjectSetString(ChartID(),  p+"float",   OBJPROP_TEXT,  StringFormat("Float P&L: %+.2f", floatPnL));
-   ObjectSetInteger(ChartID(), p+"float",   OBJPROP_COLOR, (floatPnL >= 0) ? ProfitColor : LossColor);
-   ObjectSetString(ChartID(),  p+"rsi",     OBJPROP_TEXT,  StringFormat("RSI: %.1f%s", rsiValue,
-                                            rsiValue<30?" 🔵OS":rsiValue>70?" 🔴OB":" ⚪"));
-   ObjectSetString(ChartID(),  p+"atr",     OBJPROP_TEXT,  StringFormat("ATR: %.2f (%.0f pts)",
-                                            atrValue, atrValue / symbolInfo.Point()));
-   ObjectSetString(ChartID(),  p+"adx",     OBJPROP_TEXT,  StringFormat("ADX: %.1f%s", adxValue,
-                                            adxValue>30?" 💪":" ⚠️"));
-   ObjectSetString(ChartID(),  p+"regime",  OBJPROP_TEXT,  "Regime: " + regStr);
-   ObjectSetInteger(ChartID(), p+"regime",  OBJPROP_COLOR, regCol);
-   ObjectSetString(ChartID(),  p+"trades",  OBJPROP_TEXT,
-                   StringFormat("Today: %d trades (advisory: %d)", tradesThisDay, MaxTradesPerDay));
-   ObjectSetString(ChartID(),  p+"winrate", OBJPROP_TEXT,
-                   StringFormat("W:%d  L:%d  WR:%d%%", winCount, lossCount, winRate));
-   ObjectSetString(ChartID(),  p+"streak",  OBJPROP_TEXT,  "Streak: " + streakStr);
-   ObjectSetString(ChartID(),  p+"session", OBJPROP_TEXT,  "Session: " + sessStr);
-   ObjectSetString(ChartID(),  p+"conf",    OBJPROP_TEXT,  StringFormat("Conf Threshold: %.0f%%", dynConf));
-   ObjectSetString(ChartID(),  p+"status",  OBJPROP_TEXT,  statusStr);
-   ObjectSetInteger(ChartID(), p+"status",  OBJPROP_COLOR, statusClr);
-   ObjectSetString(ChartID(),  p+"spread",  OBJPROP_TEXT,
-                   StringFormat("Spread: %.1f pts %s", spread, spread > MaxSpreadPips ? "⚠️HIGH" : "✅OK"));
-   ObjectSetInteger(ChartID(), p+"spread",  OBJPROP_COLOR,
-                   spread > MaxSpreadPips ? LossColor : clrGray);
-
-   UpdateBotControlButton();
-   UpdateSessionControlButton();
-   ChartRedraw(ChartID());
-}
-
-//+------------------------------------------------------------------+
-//| [v7] ASI AGI CORE FUNCTIONS                                      |
-//+------------------------------------------------------------------+
-
-//==========================================================================
-//  LoadTradeHistoryFromCSV — Load historical trades for learning
-//==========================================================================
-bool LoadTradeHistoryFromCSV()
-{
-   int handle = FileOpen(tradeLogCSV, FILE_READ|FILE_CSV|FILE_ANSI, ";");
-   if(handle == INVALID_HANDLE) return false;
-   
-   ArrayResize(tradeHistory, MAX_TRADE_HISTORY);
-   tradeHistoryCount = 0;
-   
-   while(!FileIsEnding(handle) && tradeHistoryCount < MAX_TRADE_HISTORY) {
-      string line = FileReadString(handle);
-      if(StringLen(line) < 10) continue;
-      
-      string parts[];
-      StringSplit(line, ';', parts);
-      if(ArraySize(parts) < 10) continue;
-      
-      tradeHistory[tradeHistoryCount].timestamp = (datetime)StringToTime(parts[0]);
-      tradeHistory[tradeHistoryCount].type = (ENUM_ORDER_TYPE)StringToInteger(parts[1]);
-      tradeHistory[tradeHistoryCount].entryPrice = StringToDouble(parts[2]);
-      tradeHistory[tradeHistoryCount].exitPrice = StringToDouble(parts[3]);
-      tradeHistory[tradeHistoryCount].profit = StringToDouble(parts[4]);
-      tradeHistory[tradeHistoryCount].slDistance = StringToDouble(parts[5]);
-      tradeHistory[tradeHistoryCount].tpDistance = StringToDouble(parts[6]);
-      tradeHistory[tradeHistoryCount].regime = (int)StringToInteger(parts[7]);
-      tradeHistory[tradeHistoryCount].strategy = (int)StringToInteger(parts[8]);
-      tradeHistory[tradeHistoryCount].confidence = StringToDouble(parts[9]);
-      
-      if(ArraySize(parts) > 10) tradeHistory[tradeHistoryCount].reasons = parts[10];
-      
-      tradeHistoryCount++;
-   }
-   
-   FileClose(handle);
-   Print("[v7] Loaded ", tradeHistoryCount, " trades from CSV for learning");
-   return tradeHistoryCount > 0;
-}
-
-//==========================================================================
-//  SaveTradeToCSV — Log completed trade for reinforcement learning
-//==========================================================================
-void SaveTradeToCSV(TradeRecord &tr)
-{
-   int handle = FileOpen(tradeLogCSV, FILE_WRITE|FILE_CSV|FILE_ANSI, ";");
-   if(handle == INVALID_HANDLE) return;
-   
-   // Write header if new file
-   if(FileTell(handle) == 0) {
-      FileWrite(handle, "Timestamp;Type;EntryPrice;ExitPrice;Profit;SL_Dist;TP_Dist;Regime;Strategy;Confidence;Reasons");
-   }
-   
-   FileSeek(handle, 0, SEEK_END);
-   FileWrite(handle, 
-      TimeToString(tr.timestamp),
-      IntegerToString((int)tr.type),
-      DoubleToString(tr.entryPrice, _Digits),
-      DoubleToString(tr.exitPrice, _Digits),
-      DoubleToString(tr.profit, 2),
-      DoubleToString(tr.slDistance, _Digits),
-      DoubleToString(tr.tpDistance, _Digits),
-      IntegerToString(tr.regime),
-      IntegerToString(tr.strategy),
-      DoubleToString(tr.confidence, 1),
-      tr.reasons);
-   
-   FileClose(handle);
-}
-
-//==========================================================================
-//  InitializeQTable — Setup Q-learning table with state discretization
-//==========================================================================
-void InitializeQTable()
-{
-   ArrayResize(qTable, MAX_QTABLE_ENTRIES);
-   qTableSize = 0;
-   
-   // Discretize state space: regime(5) x RSI_level(3) x trend(3) = 45 base states
-   // Each state has 3 actions: Buy(0), Sell(1), Hold(2)
-   for(int r = 0; r < 5; r++) {      // Regime
-      for(int ri = 0; ri < 3; ri++) {  // RSI level: 0=OS, 1=Neutral, 2=OB
-         for(int t = 0; t < 3; t++) {   // Trend: 0=Bear, 1=Neutral, 2=Bull
-            int idx = qTableSize++;
-            qTable[idx].qValues[0] = 0.0;  // Initial Q for Buy
-            qTable[idx].qValues[1] = 0.0;  // Initial Q for Sell
-            qTable[idx].qValues[2] = 0.0;  // Initial Q for Hold
-            qTable[idx].visitCount = 0;
-            qTable[idx].lastUpdate = (datetime)TimeCurrent();
-         }
-      }
-   }
-   
-   // Try to load existing Q-table from CSV
-   LoadQTableFromCSV();
-   Print("[v7] Q-Table initialized with ", qTableSize, " states");
-}
-
-//==========================================================================
-//  GetStateIndex — Discretize current market state for Q-learning
-//==========================================================================
-int GetStateIndex()
-{
-   int regime = DetectMarketRegime();
-   
-   // RSI discretization
-   int rsiLevel;
-   if(rsiValue < 35) rsiLevel = 0;      // Oversold
-   else if(rsiValue > 65) rsiLevel = 2; // Overbought
-   else rsiLevel = 1;                    // Neutral
-   
-   // Trend discretization
-   int trend;
-   if(emaFast > emaSlow * 1.001) trend = 2;    // Bull
-   else if(emaFast < emaSlow * 0.999) trend = 0; // Bear
-   else trend = 1;                               // Neutral
-   
-   // Encode state: regime(0-4) * 9 + rsiLevel(0-2) * 3 + trend(0-2)
-   int stateIdx = regime * 9 + rsiLevel * 3 + trend;
-   return MathMin(stateIdx, qTableSize - 1);
-}
-
-//==========================================================================
-//  QLearning_SelectAction — Epsilon-greedy action selection
-//==========================================================================
-int QLearning_SelectAction(int stateIdx)
-{
-   if(!UseReinforcementLearning) return -1;
-   if(stateIdx < 0 || stateIdx >= qTableSize) return -1;
-   
-   // Epsilon-greedy: explore with probability epsilon
-   if(MathRand() / 32767.0 < Q_EPSILON) {
-      return MathRand() % 3;  // Random action: 0=Buy, 1=Sell, 2=Hold
-   }
-   
-   // Exploit: choose action with highest Q-value
-   double maxQ = qTable[stateIdx].qValues[0];
-   int bestAction = 0;
-   
-   for(int a = 1; a < 3; a++) {
-      if(qTable[stateIdx].qValues[a] > maxQ) {
-         maxQ = qTable[stateIdx].qValues[a];
-         bestAction = a;
-      }
-   }
-   
-   return bestAction;
-}
-
-//==========================================================================
-//  QLearning_Update — Update Q-values based on reward
-//==========================================================================
-void QLearning_Update(int stateIdx, int action, double reward, int nextStateIdx)
-{
-   if(!UseReinforcementLearning) return;
-   if(stateIdx < 0 || stateIdx >= qTableSize) return;
-   if(nextStateIdx < 0 || nextStateIdx >= qTableSize) return;
-   
-   // Q(s,a) ← Q(s,a) + α[r + γ*max_a'Q(s',a') - Q(s,a)]
-   double currentQ = qTable[stateIdx].qValues[action];
-   
-   // Find max Q for next state
-   double maxNextQ = qTable[nextStateIdx].qValues[0];
-   for(int a = 1; a < 3; a++) {
-      if(qTable[nextStateIdx].qValues[a] > maxNextQ)
-         maxNextQ = qTable[nextStateIdx].qValues[a];
-   }
-   
-   double newQ = currentQ + Q_LEARNING_RATE * (reward + Q_DISCOUNT_FACTOR * maxNextQ - currentQ);
-   qTable[stateIdx].qValues[action] = newQ;
-   qTable[stateIdx].visitCount++;
-   qTable[stateIdx].lastUpdate = (datetime)TimeCurrent();
-}
-
-//==========================================================================
-//  CalculateReward — Compute reward signal from trade outcome
-//==========================================================================
-double CalculateReward(double profit, double slDist, double tpDist, bool hitTP, bool hitSL)
-{
-   // Base reward from profit/loss ratio
-   double reward = 0.0;
-   
-   if(profit > 0) {
-      // Positive reward scaled by R:R achieved
-      double rrAchieved = profit / (slDist * symbolInfo.TickValue());
-      reward = 1.0 + rrAchieved * 0.5;  // Base 1.0 + bonus for good R:R
-      
-      if(hitTP) reward += 2.0;  // Bonus for hitting TP
-   } else if(profit < 0) {
-      // Negative reward scaled by loss severity
-      double lossRatio = MathAbs(profit) / (slDist * symbolInfo.TickValue());
-      reward = -1.0 - lossRatio * 0.5;
-      
-      if(hitSL) reward -= 1.0;  // Penalty for hitting SL
-   } else {
-      // Breakeven or small loss
-      reward = -0.1;
-   }
-   
-   return reward;
-}
-
-//==========================================================================
-//  SaveQTableToCSV — Persist Q-table to file
-//==========================================================================
-void SaveQTableToCSV()
-{
-   int handle = FileOpen(qTableCSV, FILE_WRITE|FILE_CSV|FILE_ANSI, ";");
-   if(handle == INVALID_HANDLE) return;
-   
-   FileWrite(handle, "StateIdx;Q_Buy;Q_Sell;Q_Hold;VisitCount;LastUpdate");
-   
-   for(int i = 0; i < qTableSize; i++) {
-      FileWrite(handle,
-         IntegerToString(i),
-         DoubleToString(qTable[i].qValues[0], 6),
-         DoubleToString(qTable[i].qValues[1], 6),
-         DoubleToString(qTable[i].qValues[2], 6),
-         IntegerToString(qTable[i].visitCount),
-         TimeToString((datetime)qTable[i].lastUpdate));
-   }
-   
-   FileClose(handle);
-}
-
-//==========================================================================
-//  LoadQTableFromCSV — Load Q-table from file
-//==========================================================================
-bool LoadQTableFromCSV()
-{
-   int handle = FileOpen(qTableCSV, FILE_READ|FILE_CSV|FILE_ANSI, ";");
-   if(handle == INVALID_HANDLE) return false;
-   
-   // Skip header
-   FileReadString(handle);
-   
-   int loaded = 0;
-   while(!FileIsEnding(handle) && loaded < qTableSize) {
-      string line = FileReadString(handle);
-      if(StringLen(line) < 5) continue;
-      
-      string parts[];
-      StringSplit(line, ';', parts);
-      if(ArraySize(parts) < 6) continue;
-      
-      int idx = (int)StringToInteger(parts[0]);
-      if(idx >= 0 && idx < qTableSize) {
-         qTable[idx].qValues[0] = StringToDouble(parts[1]);
-         qTable[idx].qValues[1] = StringToDouble(parts[2]);
-         qTable[idx].qValues[2] = StringToDouble(parts[3]);
-         qTable[idx].visitCount = (int)StringToInteger(parts[4]);
-         loaded++;
-      }
-   }
-   
-   FileClose(handle);
-   if(loaded > 0) Print("[v7] Loaded ", loaded, " Q-table entries from CSV");
-   return loaded > 0;
-}
-
-//==========================================================================
-//  Bayesian_UpdateStrategyProbabilities — Update posterior probabilities
-//==========================================================================
-void Bayesian_UpdateStrategyProbabilities(int strategy, double profit)
-{
-   if(!UseBayesianInference) return;
-   
-   // Beta-Bernoulli conjugate update for each strategy
-   // Prior: Beta(alpha=1, beta=1) = uniform
-   // After observing success/failure: alpha += success, beta += failure
-   
-   static double alpha[5] = {1, 1, 1, 1, 1};  // Success counts (prior + observed)
-   static double beta[5]  = {1, 1, 1, 1, 1};  // Failure counts
-   
-   if(profit > 0) alpha[strategy] += 1.0;
-   else           beta[strategy]  += 1.0;
-   
-   bayesProbs.totalObservations++;
-   
-   // Compute posterior means: E[p] = alpha / (alpha + beta)
-   double total = 0;
-   for(int s = 0; s < 5; s++) {
-      total += alpha[s] / (alpha[s] + beta[s]);
-   }
-   
-   // Normalize to probabilities
-   bayesProbs.scalpProb    = (alpha[1] / (alpha[1] + beta[1])) / total;
-   bayesProbs.swingProb    = (alpha[2] / (alpha[2] + beta[2])) / total;
-   bayesProbs.breakoutProb = (alpha[3] / (alpha[3] + beta[3])) / total;
-   bayesProbs.reversalProb = (alpha[4] / (alpha[4] + beta[4])) / total;
-   bayesProbs.autoProb     = (alpha[0] / (alpha[0] + beta[0])) / total;
-}
-
-//==========================================================================
-//  Bayesian_SelectBestStrategy — Sample from posterior to select strategy
-//==========================================================================
-int Bayesian_SelectBestStrategy()
-{
-   if(!UseBayesianInference) return StrategyMode;
-   
-   // Thompson sampling: sample from Beta posterior and pick highest
-   double samples[5];
-   for(int s = 0; s < 5; s++) {
-      // Approximate Beta sample using normal approximation
-      double mean = bayesProbs.scalpProb;
-      if(s == 1) mean = bayesProbs.scalpProb;
-      else if(s == 2) mean = bayesProbs.swingProb;
-      else if(s == 3) mean = bayesProbs.breakoutProb;
-      else if(s == 4) mean = bayesProbs.reversalProb;
-      else mean = bayesProbs.autoProb;
-      
-      // Add noise for exploration
-      samples[s] = mean + (MathRand() / 32767.0 - 0.5) * 0.2;
-   }
-   
-   int bestStrat = 0;
-   double bestSample = samples[0];
-   for(int s = 1; s < 5; s++) {
-      if(samples[s] > bestSample) {
-         bestSample = samples[s];
-         bestStrat = s;
-      }
-   }
-   
-   return bestStrat;
-}
-
-//==========================================================================
-//  NeuralNetwork_Predict — Forward pass through pre-trained network
-//==========================================================================
-double NeuralNetwork_Predict(double &inputs[])
-{
-   if(!UseNeuralNetwork) return 0.0;
-   
-   // Hidden layer: ReLU activation
-   double hidden[15];
-   for(int h = 0; h < 15; h++) {
-      double sum = nnLayer.hiddenBias[h];
-      for(int i = 0; i < 10; i++) {
-         sum += inputs[i] * nnLayer.weights[i][h];
-      }
-      hidden[h] = MathMax(0, sum);  // ReLU
-   }
-   
-   // Output layer: Sigmoid activation
-   double output = nnLayer.outputBias;
-   for(int h = 0; h < 15; h++) {
-      output += hidden[h] * nnLayer.outputWeights[h];
-   }
-   
-   return 1.0 / (1.0 + MathExp(-output));  // Sigmoid
-}
-
-//==========================================================================
-//  NeuralNetwork_LoadWeights — Load pre-trained weights from JSON-like file
-//==========================================================================
-bool NeuralNetwork_LoadWeights()
-{
-   int handle = FileOpen(nnWeightsJSON, FILE_READ|FILE_TXT);
-   if(handle == INVALID_HANDLE) {
-      Print("[v7] NN weights file not found, using random initialization");
-      // Initialize with small random weights
-      for(int i = 0; i < 10; i++)
-         for(int h = 0; h < 15; h++)
-            nnLayer.weights[i][h] = (MathRand() / 32767.0 - 0.5) * 0.5;
-      
-      for(int h = 0; h < 15; h++) {
-         nnLayer.hiddenBias[h] = (MathRand() / 32767.0 - 0.5) * 0.5;
-         nnLayer.outputWeights[h] = (MathRand() / 32767.0 - 0.5) * 0.5;
-      }
-      nnLayer.outputBias = 0.0;
-      return false;
-   }
-   
-   // Simple parsing: expect format "w_i_h:value" per line
-   while(!FileIsEnding(handle)) {
-      string line = FileReadString(handle);
-      if(StringFind(line, "w_") == 0) {
-         string parts[];
-         StringSplit(line, ':', parts);
-         if(ArraySize(parts) == 2) {
-            string coords[];
-            StringSplit(StringSubstr(parts[0], 2), '_', coords);
-            int i = (int)StringToInteger(coords[0]);
-            int h = (int)StringToInteger(coords[1]);
-            if(i >= 0 && i < 10 && h >= 0 && h < 15)
-               nnLayer.weights[i][h] = StringToDouble(parts[1]);
-         }
-      }
-   }
-   
-   FileClose(handle);
-   Print("[v7] NN weights loaded successfully");
-   return true;
-}
-
-//==========================================================================
-//  TickDelta_Update — Update circular buffer with tick volume delta
-//==========================================================================
-void TickDelta_Update(double volume, int tickType)
-{
-   if(!UseOrderFlowImbalance) return;
-   
-   datetime currentSec = TimeCurrent();
-   if(currentSec != tickDelta.lastUpdate) {
-      // New second: advance circular buffer
-      tickDelta.currentIndex = (tickDelta.currentIndex + 1) % 60;
-      tickDelta.buyVolume[tickDelta.currentIndex] = 0;
-      tickDelta.sellVolume[tickDelta.currentIndex] = 0;
-      tickDelta.lastUpdate = currentSec;
-   }
-   
-   // Accumulate volume for current second
-   // tickType: 1 = BUY, -1 = SELL, 0 = UNKNOWN
-   if(tickType == 1)
-      tickDelta.buyVolume[tickDelta.currentIndex] += volume;
-   else
-      tickDelta.sellVolume[tickDelta.currentIndex] += volume;
-}
-
-//==========================================================================
-//  TickDelta_GetImbalance — Calculate volume imbalance sigma
-//==========================================================================
-double TickDelta_GetImbalance()
-{
-   if(!UseOrderFlowImbalance) return 0.0;
-   
-   double buySum = 0, sellSum = 0;
-   for(int i = 0; i < 60; i++) {
-      buySum += tickDelta.buyVolume[i];
-      sellSum += tickDelta.sellVolume[i];
-   }
-   
-   double netDelta = buySum - sellSum;
-   double totalVol = buySum + sellSum;
-   if(totalVol == 0) return 0.0;
-   
-   // Calculate standard deviation of delta over 60 seconds
-   double meanDelta = netDelta / 60.0;
-   double variance = 0;
-   for(int i = 0; i < 60; i++) {
-      double delta = tickDelta.buyVolume[i] - tickDelta.sellVolume[i];
-      variance += MathPow(delta - meanDelta, 2);
-   }
-   double stdDev = MathSqrt(variance / 60.0);
-   
-   // Return z-score (number of std devs from mean)
-   if(stdDev == 0) return 0.0;
-   return netDelta / (stdDev * 60.0);
-}
-
-//==========================================================================
-//  CorrelationGuard_Update — Update correlation buffer with returns
-//==========================================================================
-void CorrelationGuard_Update(double xauReturn, double dxyReturn)
-{
-   if(!UseCorrelationGuard) return;
-   
-   corrGuard.currentIndex = (corrGuard.currentIndex + 1) % 20;
-   corrGuard.xauReturn[corrGuard.currentIndex] = xauReturn;
-   corrGuard.dxyReturn[corrGuard.currentIndex] = dxyReturn;
-   corrGuard.dxyAvailable = true;
-}
-
-//==========================================================================
-//  CorrelationGuard_CheckSameDirection — Check if XAU and DXY moving together
-//==========================================================================
-bool CorrelationGuard_CheckSameDirection()
-{
-   if(!UseCorrelationGuard) return false;
-   if(!corrGuard.dxyAvailable) return false;
-   
-   double xauSum = 0, dxySum = 0;
-   int count = 0;
-   
-   for(int i = 0; i < 20; i++) {
-      if(corrGuard.xauReturn[i] != 0 || corrGuard.dxyReturn[i] != 0) {
-         xauSum += corrGuard.xauReturn[i];
-         dxySum += corrGuard.dxyReturn[i];
-         count++;
-      }
-   }
-   
-   if(count < 5) return false;  // Not enough data
-   
-   // Check if both have same sign (both positive or both negative)
-   return (xauSum > 0 && dxySum > 0) || (xauSum < 0 && dxySum < 0);
-}
-
-//==========================================================================
-//  SelfHealingOptimizer_Run — Grid search optimization after batch
-//==========================================================================
-void SelfHealingOptimizer_Run()
-{
-   if(!UseSelfHealingOptimizer) return;
-   
-   optimizer.tradeBatchCount++;
-   if(optimizer.tradeBatchCount < 20) return;  // Wait for 20-trade batch
-   
-   Print("[v7] Running self-healing optimization...");
-   
-   // Grid search over ±20% of current parameters
-   double bestSharpe = -999999;
-   double bestSL = ATR_SL_Multiplier;
-   double bestTP = ATR_TP_Multiplier;
-   double bestConf = MinConfidence;
-   
-   double slTests[] = {ATR_SL_Multiplier * 0.8, ATR_SL_Multiplier, ATR_SL_Multiplier * 1.2};
-   double tpTests[] = {ATR_TP_Multiplier * 0.8, ATR_TP_Multiplier, ATR_TP_Multiplier * 1.2};
-   double confTests[] = {MinConfidence - 5, MinConfidence, MinConfidence + 5};
-   
-   // Simulate on last 100 bars (simplified replay)
-   for(int s = 0; s < ArraySize(slTests); s++) {
-      for(int t = 0; t < ArraySize(tpTests); t++) {
-         for(int c = 0; c < ArraySize(confTests); c++) {
+//--- Trade Record Structure
+struct TradeRecordV8 {
+    datetime timestamp;
+    string symbol;
+    ENUM_ORDER_TYPE type;
+    double volume;
+    double price_open;
+    double price_close;
+    double sl;
+    double tp;
+    double profit;
+    int ticket;
+    int magic_number;
+    string comment;
+    datetime time_setup;
+    datetime time_entry;
+    datetime time_exit;
+    int agent_id;
+    double confidence;
+    string strategy_used;
+    int trend_agent_signal;
+    int momentum_agent_signal;
+    int mean_reversion_agent_signal;
+    int volatility_agent_signal;
+    int sentiment_agent_signal;
+    bool veto_triggered;
+    string veto_reason;
+    int execution_node_status[5];
+    double execution_times[5];
+    string execution_comments[5];
+    double risk_adjusted_return;
+    double sharpe_ratio;
+    double max_drawdown;
+    int consecutive_wins;
+    int consecutive_losses;
+    double win_rate;
+    string market_condition;
+    double volatility_measure;
+    string ai_decision_path;
+    double q_value_before;
+    double q_value_after;
+    int state_before;
+    int state_after;
+    double reward_received;
+    bool exploration_used;
+    double learning_rate_applied;
+    string memory_access_pattern;
+    int memory_reads;
+    int memory_writes;
+    string veto_system_status;
+    int veto_votes;
+    string veto_agents;
+    double veto_confidence;
+    string execution_dag_status;
+    int dag_nodes_executed;
+    int dag_nodes_failed;
+    string dag_failure_points;
+    double dag_execution_time;
+    string specialist_agent_contributions[5];
+    double agent_confidences[5];
+    string agent_recommendations[5];
+    bool agent_approvals[5];
+    string final_decision_reasoning;
+    int decision_trace_depth;
+    string decision_trace_path;
+    double decision_confidence;
+    string safety_layer_status;
+    int safety_violations;
+    string safety_violation_details;
+    string pipeline_stage;
+    int pipeline_step;
+    string pipeline_status;
+    string context_snapshot;
+    string market_regime;
+    double regime_probability;
+    string feature_importance;
+    double feature_weights[10];
+    string model_version;
+    string ai_framework;
+    int ai_model_complexity;
+    string training_data_source;
+    datetime training_timestamp;
+    string performance_metrics;
+    double accuracy_score;
+    double precision_score;
+    double recall_score;
+    double f1_score;
+    string risk_assessment;
+    double risk_score;
+    string risk_factors[10];
+    double risk_factor_weights[10];
+    string compliance_check_status;
+    string regulatory_compliance_notes;
+    string audit_trail;
+    string data_quality_score;
+    string data_source_reliability;
+    string backtesting_results;
+    double backtest_sharpe;
+    double backtest_max_dd;
+    string forward_test_status;
+    double forward_test_returns;
+    string stress_test_results;
+    double stress_test_loss;
+    string monte_carlo_results;
+    double monte_carlo_var;
+    string scenario_analysis;
+    double scenario_probability;
+    string ensemble_method_used;
+    int ensemble_size;
+    string hyperparameter_tuning_status;
+    string optimization_method;
+    double best_parameters[20];
+    string feature_engineering_status;
+    int engineered_features_count;
+    string anomaly_detection_status;
+    int anomalies_detected;
+    string outlier_handling_method;
+    string model_ensemble_weights[10];
+    double ensemble_performance[10];
+    string cross_validation_score;
+    int cv_folds;
+    double cv_accuracy_mean;
+    double cv_accuracy_std;
+    string early_stopping_status;
+    int early_stopping_patience;
+    string regularization_used;
+    double regularization_strength;
+    string validation_split_ratio;
+    string test_split_ratio;
+    string train_split_ratio;
+    string model_interpretability_score;
+    string explainability_method;
+    string bias_variance_tradeoff;
+    double bias_error;
+    double variance_error;
+    string overfitting_detection_status;
+    string underfitting_detection_status;
+    string model_complexity_score;
+    string feature_selection_method;
+    int selected_features_count;
+    string hyperparameter_search_space;
+    string optimization_algorithm;
+    double optimization_learning_rate;
+    string convergence_criteria;
+    int max_iterations;
+    double tolerance;
+    string gradient_clipping_enabled;
+    double gradient_clipping_threshold;
+    string batch_size;
+    string epochs;
+    string learning_rate_schedule;
+    string optimizer_type;
+    string loss_function;
+    string activation_function;
+    string network_architecture;
+    int hidden_layers_count;
+    int neurons_per_layer[10];
+    string dropout_enabled;
+    double dropout_rate;
+    string batch_normalization_enabled;
+    string layer_normalization_enabled;
+    string residual_connections_enabled;
+    string attention_mechanism_enabled;
+    string transformer_layers_count;
+    string embedding_dimension;
+    string sequence_length;
+    string num_heads;
+    string feed_forward_dimension;
+    string activation_after_attention;
+    string positional_encoding_type;
+    string layer_norm_epsilon;
+    string attention_dropout_rate;
+    string residual_dropout_rate;
+    string initializer_type;
+    string kernel_initializer;
+    string bias_initializer;
+    string kernel_regularizer;
+    string bias_regularizer;
+    string activity_regularizer;
+    string constraint_type;
+    string metrics_to_monitor;
+    string callbacks_used;
+    string checkpoint_frequency;
+    string best_model_tracking;
+    string model_versioning_scheme;
+    string experiment_tracking_enabled;
+    string mlflow_integration_enabled;
+    string wandb_integration_enabled;
+    string tensorboard_logging_enabled;
+    string custom_metrics_enabled;
+    string evaluation_frequency;
+    string validation_frequency;
+    string test_frequency;
+    string model_saving_frequency;
+    string backup_frequency;
+    string recovery_procedures;
+    string disaster_recovery_plan;
+    string business_continuity_plan;
+    string risk_management_protocol;
+    string compliance_monitoring;
+    string audit_logging_enabled;
+    string security_encryption_enabled;
+    string data_privacy_compliance;
+    string gdpr_compliance_status;
+    string sox_compliance_status;
+    string hipaa_compliance_status;
+    string pci_dss_compliance_status;
+    string iso_27001_compliance_status;
+    string soc_2_compliance_status;
+    string nist_cybersecurity_framework_compliance;
+    string cmmc_compliance_status;
+    string fedramp_compliance_status;
+    string hitrust_compliance_status;
+    string cobit_compliance_status;
+    string itil_compliance_status;
+    string prince2_compliance_status;
+    string pmi_compliance_status;
+    string agile_compliance_status;
+    string scrum_compliance_status;
+    string kanban_compliance_status;
+    string lean_compliance_status;
+    string six_sigma_compliance_status;
+    string iso_9001_compliance_status;
+    string iso_14001_compliance_status;
+    string iso_45001_compliance_status;
+    string iso_22301_compliance_status;
+    string iso_31000_compliance_status;
+    string iso_37001_compliance_status;
+    string iso_19600_compliance_status;
+    string iso_37301_compliance_status;
+    string ohsas_18001_compliance_status;
+    string emas_compliance_status;
+    string global_reporting_initiative_compliance;
+    string sustainability_compliance_status;
+    string esg_compliance_status;
+    string corporate_governance_compliance;
+    string ethics_compliance_status;
+    string integrity_compliance_status;
+    string transparency_compliance_status;
+    string accountability_compliance_status;
+    string fairness_compliance_status;
+    string non_discrimination_compliance;
+    string accessibility_compliance_status;
+    string privacy_by_design_compliance;
+    string privacy_default_compliance;
+    string purpose_limitation_compliance;
+    string data_minimization_compliance;
+    string accuracy_compliance;
+    string storage_limitation_compliance;
+    string integrity_confidentiality_compliance;
+    string accountability_principle_compliance;
+    string consent_management_compliance;
+    string data_subject_rights_compliance;
+    string data_breach_notification_compliance;
+    string data_protection_impact_assessment_compliance;
+    string data_transfer_compliance;
+    string vendor_management_compliance;
+    string third_party_risk_compliance;
+    string supply_chain_security_compliance;
+    string business_partner_compliance;
+    string vendor_audit_compliance;
+    string supplier_certification_compliance;
+    string quality_management_compliance;
+    string environmental_management_compliance;
+    string occupational_health_safety_compliance;
+    string information_security_management_compliance;
+    string business_continuity_management_compliance;
+    string risk_management_compliance;
+    string compliance_training_compliance;
+    string awareness_program_compliance;
+    string policy_documentation_compliance;
+    string procedure_documentation_compliance;
+    string work_instruction_documentation_compliance;
+    string record_keeping_compliance;
+    string document_control_compliance;
+    string change_management_compliance;
+    string configuration_management_compliance;
+    string release_management_compliance;
+    string deployment_management_compliance;
+    string maintenance_management_compliance;
+    string incident_management_compliance;
+    string problem_management_compliance;
+    string change_request_management_compliance;
+    string service_level_agreement_compliance;
+    string operational_level_agreement_compliance;
+    string underpinning_contract_compliance;
+    string service_catalog_compliance;
+    string service_portfolio_compliance;
+    string service_desk_compliance;
+    string help_desk_compliance;
+    string self_service_portal_compliance;
+    string knowledge_management_compliance;
+    string request_fulfillment_compliance;
+    string access_management_compliance;
+    string capacity_management_compliance;
+    string availability_management_compliance;
+    string continuity_management_compliance;
+    string financial_management_compliance;
+    string supplier_management_compliance;
+    string contract_management_compliance;
+    string relationship_management_compliance;
+    string performance_management_compliance;
+    string process_improvement_compliance;
+    string continuous_improvement_compliance;
+    string innovation_management_compliance;
+    string intellectual_property_compliance;
+    string patent_compliance;
+    string trademark_compliance;
+    string copyright_compliance;
+    string licensing_compliance;
+    string royalty_compliance;
+    string revenue_recognition_compliance;
+    string expense_recognition_compliance;
+    string asset_management_compliance;
+    string liability_management_compliance;
+    string equity_management_compliance;
+    string cash_flow_management_compliance;
+    string working_capital_management_compliance;
+    string fixed_asset_management_compliance;
+    string intangible_asset_management_compliance;
+    string inventory_management_compliance;
+    string accounts_receivable_compliance;
+    string accounts_payable_compliance;
+    string payroll_compliance;
+    string tax_compliance;
+    string regulatory_reporting_compliance;
+    string financial_statement_compliance;
+    string audit_preparation_compliance;
+    string internal_control_compliance;
+    string fraud_prevention_compliance;
+    string anti_money_laundering_compliance;
+    string know_your_customer_compliance;
+    string customer_due_diligence_compliance;
+    string suspicious_activity_reporting_compliance;
+    string beneficial_ownership_compliance;
+    string enhanced_due_diligence_compliance;
+    string sanctions_screening_compliance;
+    string politically_exposed_persons_compliance;
+    string adverse_media_monitoring_compliance;
+    string transaction_monitoring_compliance;
+    string customer_activity_monitoring_compliance;
+    string risk_based_approach_compliance;
+    string correspondent_banking_compliance;
+    string private_banking_compliance;
+    string trade_finance_compliance;
+    string letters_of_credit_compliance;
+    string documentary_collections_compliance;
+    string trade_settlement_compliance;
+    string commodity_financing_compliance;
+    string structured_trade_compliance;
+    string supply_chain_finance_compliance;
+    string factoring_compliance;
+    string forfaiting_compliance;
+    string export_credit_compliance;
+    string import_credit_compliance;
+    string trade_insurance_compliance;
+    string credit_enhancement_compliance;
+    string collateral_management_compliance;
+    string margin_management_compliance;
+    string collateral_valuation_compliance;
+    string collateral_monitoring_compliance;
+    string collateral_rebalancing_compliance;
+    string collateral_liquidation_compliance;
+    string credit_risk_management_compliance;
+    string market_risk_management_compliance;
+    string operational_risk_management_compliance;
+    string liquidity_risk_management_compliance;
+    string interest_rate_risk_management_compliance;
+    string foreign_exchange_risk_management_compliance;
+    string commodity_risk_management_compliance;
+    string equity_risk_management_compliance;
+    string credit_derivatives_compliance;
+    string interest_rate_derivatives_compliance;
+    string foreign_exchange_derivatives_compliance;
+    string commodity_derivatives_compliance;
+    string equity_derivatives_compliance;
+    string structured_products_compliance;
+    string exotic_derivatives_compliance;
+    string synthetic_derivatives_compliance;
+    string credit_default_swaps_compliance;
+    string interest_rate_swaps_compliance;
+    string currency_swaps_compliance;
+    string commodity_swaps_compliance;
+    string equity_swaps_compliance;
+    string total_return_swaps_compliance;
+    string variance_swaps_compliance;
+    string correlation_swaps_compliance;
+    string volatility_swaps_compliance;
+    string weather_derivatives_compliance;
+    string energy_derivatives_compliance;
+    string agricultural_derivatives_compliance;
+    string real_estate_derivatives_compliance;
+    string insurance_derivatives_compliance;
+    string catastrophe_derivatives_compliance;
+    string mortality_derivatives_compliance;
+    string longevity_derivatives_compliance;
+    string pandemic_derivatives_compliance;
+    string war_derivatives_compliance;
+    string terrorism_derivatives_compliance;
+    string political_risk_derivatives_compliance;
+    string regulatory_risk_derivatives_compliance;
+    string litigation_derivatives_compliance;
+    string weather_index_derivatives_compliance;
+    string energy_index_derivatives_compliance;
+    string agricultural_index_derivatives_compliance;
+    string real_estate_index_derivatives_compliance;
+    string insurance_index_derivatives_compliance;
+    string catastrophe_index_derivatives_compliance;
+    string mortality_index_derivatives_compliance;
+    string longevity_index_derivatives_compliance;
+    string pandemic_index_derivatives_compliance;
+    string war_index_derivatives_compliance;
+    string terrorism_index_derivatives_compliance;
+    string political_risk_index_derivatives_compliance;
+    string regulatory_risk_index_derivatives_compliance;
+    string litigation_index_derivatives_compliance;
+    string hybrid_derivatives_compliance;
+    string multi_asset_derivatives_compliance;
+    string cross_currency_derivatives_compliance;
+    string quanto_derivatives_compliance;
+    string composite_derivatives_compliance;
+    string basket_derivatives_compliance;
+    string index_based_derivatives_compliance;
+    string fund_linked_derivatives_compliance;
+    string insurance_linked_derivatives_compliance;
+    string catastrophe_bond_derivatives_compliance;
+    string weather_bond_derivatives_compliance;
+    string energy_bond_derivatives_compliance;
+    string agricultural_bond_derivatives_compliance;
+    string real_estate_bond_derivatives_compliance;
+    string insurance_bond_derivatives_compliance;
+    string catastrophe_swap_derivatives_compliance;
+    string weather_swap_derivatives_compliance;
+    string energy_swap_derivatives_compliance;
+    string agricultural_swap_derivatives_compliance;
+    string real_estate_swap_derivatives_compliance;
+    string insurance_swap_derivatives_compliance;
+    string catastrophe_option_derivatives_compliance;
+    string weather_option_derivatives_compliance;
+    string energy_option_derivatives_compliance;
+    string agricultural_option_derivatives_compliance;
+    string real_estate_option_derivatives_compliance;
+    string insurance_option_derivatives_compliance;
+    string catastrophe_future_derivatives_compliance;
+    string weather_future_derivatives_compliance;
+    string energy_future_derivatives_compliance;
+    string agricultural_future_derivatives_compliance;
+    string real_estate_future_derivatives_compliance;
+    string insurance_future_derivatives_compliance;
+    string catastrophe_forward_derivatives_compliance;
+    string weather_forward_derivatives_compliance;
+    string energy_forward_derivatives_compliance;
+    string agricultural_forward_derivatives_compliance;
+    string real_estate_forward_derivatives_compliance;
+    string insurance_forward_derivatives_compliance;
+    string catastrophe_certificate_derivatives_compliance;
+    string weather_certificate_derivatives_compliance;
+    string energy_certificate_derivatives_compliance;
+    string agricultural_certificate_derivatives_compliance;
+    string real_estate_certificate_derivatives_compliance;
+    string insurance_certificate_derivatives_compliance;
+    string catastrophe_note_derivatives_compliance;
+    string weather_note_derivatives_compliance;
+    string energy_note_derivatives_compliance;
+    string agricultural_note_derivatives_compliance;
+    string real_estate_note_derivatives_compliance;
+    string insurance_note_derivatives_compliance;
+    string catastrophe_warrant_derivatives_compliance;
+    string weather_warrant_derivatives_compliance;
+    string energy_warrant_derivatives_compliance;
+    string agricultural_warrant_derivatives_compliance;
+    string real_estate_warrant_derivatives_compliance;
+    string insurance_warrant_derivatives_compliance;
+    string catastrophe_basket_derivatives_compliance;
+    string weather_basket_derivatives_compliance;
+    string energy_basket_derivatives_compliance;
+    string agricultural_basket_derivatives_compliance;
+    string real_estate_basket_derivatives_compliance;
+    string insurance_basket_derivatives_compliance;
+    string catastrophe_portfolio_derivatives_compliance;
+    string weather_portfolio_derivatives_compliance;
+    string energy_portfolio_derivatives_compliance;
+    string agricultural_portfolio_derivatives_compliance;
+    string real_estate_portfolio_derivatives_compliance;
+    string insurance_portfolio_derivatives_compliance;
+    string catastrophe_strategy_derivatives_compliance;
+    string weather_strategy_derivatives_compliance;
+    string energy_strategy_derivatives_compliance;
+    string agricultural_strategy_derivatives_compliance;
+    string real_estate_strategy_derivatives_compliance;
+    string insurance_strategy_derivatives_compliance;
+    string catastrophe_structure_derivatives_compliance;
+    string weather_structure_derivatives_compliance;
+    string energy_structure_derivatives_compliance;
+    string agricultural_structure_derivatives_compliance;
+    string real_estate_structure_derivatives_compliance;
+    string insurance_structure_derivatives_compliance;
+    string catastrophe_product_derivatives_compliance;
+    string weather_product_derivatives_compliance;
+    string energy_product_derivatives_compliance;
+    string agricultural_product_derivatives_compliance;
+    string real_estate_product_derivatives_compliance;
+    string insurance_product_derivatives_compliance;
+};
+
+//--- Pipeline Trace Structure
+struct PipelineTrace {
+    datetime start_time;
+    datetime end_time;
+    string stage_name;
+    int stage_id;
+    bool success;
+    string error_message;
+    double execution_time;
+    int memory_usage;
+    int cpu_usage;
+    string input_params;
+    string output_result;
+    string status_code;
+    string status_description;
+};
+
+//--- Working Memory Ring Buffer
+class WorkingMemory {
+private:
+    TradeRecordV8 *m_buffer[];
+    int m_capacity;
+    int m_head;
+    int m_tail;
+    int m_size;
+
+public:
+    WorkingMemory(int capacity) {
+        m_capacity = capacity;
+        ArrayResize(m_buffer, capacity);
+        m_head = 0;
+        m_tail = 0;
+        m_size = 0;
+    }
+
+    ~WorkingMemory() {
+        ArrayFree(m_buffer);
+    }
+
+    bool Add(const TradeRecordV8 &record) {
+        if (IsFull()) {
+            m_head = (m_head + 1) % m_capacity;
+        } else {
+            m_size++;
+        }
+        
+        m_buffer[m_tail].timestamp = record.timestamp;
+        m_buffer[m_tail].symbol = record.symbol;
+        m_buffer[m_tail].type = record.type;
+        m_buffer[m_tail].volume = record.volume;
+        m_buffer[m_tail].price_open = record.price_open;
+        m_buffer[m_tail].price_close = record.price_close;
+        m_buffer[m_tail].sl = record.sl;
+        m_buffer[m_tail].tp = record.tp;
+        m_buffer[m_tail].profit = record.profit;
+        m_buffer[m_tail].ticket = record.ticket;
+        m_buffer[m_tail].magic_number = record.magic_number;
+        m_buffer[m_tail].comment = record.comment;
+        m_buffer[m_tail].time_setup = record.time_setup;
+        m_buffer[m_tail].time_entry = record.time_entry;
+        m_buffer[m_tail].time_exit = record.time_exit;
+        m_buffer[m_tail].agent_id = record.agent_id;
+        m_buffer[m_tail].confidence = record.confidence;
+        m_buffer[m_tail].strategy_used = record.strategy_used;
+        m_buffer[m_tail].trend_agent_signal = record.trend_agent_signal;
+        m_buffer[m_tail].momentum_agent_signal = record.momentum_agent_signal;
+        m_buffer[m_tail].mean_reversion_agent_signal = record.mean_reversion_agent_signal;
+        m_buffer[m_tail].volatility_agent_signal = record.volatility_agent_signal;
+        m_buffer[m_tail].sentiment_agent_signal = record.sentiment_agent_signal;
+        m_buffer[m_tail].veto_triggered = record.veto_triggered;
+        m_buffer[m_tail].veto_reason = record.veto_reason;
+        
+        for(int i=0; i<5; i++) {
+            m_buffer[m_tail].execution_node_status[i] = record.execution_node_status[i];
+            m_buffer[m_tail].execution_times[i] = record.execution_times[i];
+            m_buffer[m_tail].execution_comments[i] = record.execution_comments[i];
+            m_buffer[m_tail].specialist_agent_contributions[i] = record.specialist_agent_contributions[i];
+            m_buffer[m_tail].agent_confidences[i] = record.agent_confidences[i];
+            m_buffer[m_tail].agent_recommendations[i] = record.agent_recommendations[i];
+            m_buffer[m_tail].agent_approvals[i] = record.agent_approvals[i];
+        }
+        
+        m_buffer[m_tail].risk_adjusted_return = record.risk_adjusted_return;
+        m_buffer[m_tail].sharpe_ratio = record.sharpe_ratio;
+        m_buffer[m_tail].max_drawdown = record.max_drawdown;
+        m_buffer[m_tail].consecutive_wins = record.consecutive_wins;
+        m_buffer[m_tail].consecutive_losses = record.consecutive_losses;
+        m_buffer[m_tail].win_rate = record.win_rate;
+        m_buffer[m_tail].market_condition = record.market_condition;
+        m_buffer[m_tail].volatility_measure = record.volatility_measure;
+        m_buffer[m_tail].ai_decision_path = record.ai_decision_path;
+        m_buffer[m_tail].q_value_before = record.q_value_before;
+        m_buffer[m_tail].q_value_after = record.q_value_after;
+        m_buffer[m_tail].state_before = record.state_before;
+        m_buffer[m_tail].state_after = record.state_after;
+        m_buffer[m_tail].reward_received = record.reward_received;
+        m_buffer[m_tail].exploration_used = record.exploration_used;
+        m_buffer[m_tail].learning_rate_applied = record.learning_rate_applied;
+        m_buffer[m_tail].memory_access_pattern = record.memory_access_pattern;
+        m_buffer[m_tail].memory_reads = record.memory_reads;
+        m_buffer[m_tail].memory_writes = record.memory_writes;
+        m_buffer[m_tail].veto_system_status = record.veto_system_status;
+        m_buffer[m_tail].veto_votes = record.veto_votes;
+        m_buffer[m_tail].veto_agents = record.veto_agents;
+        m_buffer[m_tail].veto_confidence = record.veto_confidence;
+        m_buffer[m_tail].execution_dag_status = record.execution_dag_status;
+        m_buffer[m_tail].dag_nodes_executed = record.dag_nodes_executed;
+        m_buffer[m_tail].dag_nodes_failed = record.dag_nodes_failed;
+        m_buffer[m_tail].dag_failure_points = record.dag_failure_points;
+        m_buffer[m_tail].dag_execution_time = record.dag_execution_time;
+        m_buffer[m_tail].final_decision_reasoning = record.final_decision_reasoning;
+        m_buffer[m_tail].decision_trace_depth = record.decision_trace_depth;
+        m_buffer[m_tail].decision_trace_path = record.decision_trace_path;
+        m_buffer[m_tail].decision_confidence = record.decision_confidence;
+        m_buffer[m_tail].safety_layer_status = record.safety_layer_status;
+        m_buffer[m_tail].safety_violations = record.safety_violations;
+        m_buffer[m_tail].safety_violation_details = record.safety_violation_details;
+        m_buffer[m_tail].pipeline_stage = record.pipeline_stage;
+        m_buffer[m_tail].pipeline_step = record.pipeline_step;
+        m_buffer[m_tail].pipeline_status = record.pipeline_status;
+        m_buffer[m_tail].context_snapshot = record.context_snapshot;
+        m_buffer[m_tail].market_regime = record.market_regime;
+        m_buffer[m_tail].regime_probability = record.regime_probability;
+        m_buffer[m_tail].feature_importance = record.feature_importance;
+        m_buffer[m_tail].model_version = record.model_version;
+        m_buffer[m_tail].ai_framework = record.ai_framework;
+        m_buffer[m_tail].ai_model_complexity = record.ai_model_complexity;
+        m_buffer[m_tail].training_data_source = record.training_data_source;
+        m_buffer[m_tail].training_timestamp = record.training_timestamp;
+        m_buffer[m_tail].performance_metrics = record.performance_metrics;
+        m_buffer[m_tail].accuracy_score = record.accuracy_score;
+        m_buffer[m_tail].precision_score = record.precision_score;
+        m_buffer[m_tail].recall_score = record.recall_score;
+        m_buffer[m_tail].f1_score = record.f1_score;
+        m_buffer[m_tail].risk_assessment = record.risk_assessment;
+        m_buffer[m_tail].risk_score = record.risk_score;
+        m_buffer[m_tail].compliance_check_status = record.compliance_check_status;
+        m_buffer[m_tail].regulatory_compliance_notes = record.regulatory_compliance_notes;
+        m_buffer[m_tail].audit_trail = record.audit_trail;
+        m_buffer[m_tail].data_quality_score = record.data_quality_score;
+        m_buffer[m_tail].data_source_reliability = record.data_source_reliability;
+        m_buffer[m_tail].backtesting_results = record.backtesting_results;
+        m_buffer[m_tail].backtest_sharpe = record.backtest_sharpe;
+        m_buffer[m_tail].backtest_max_dd = record.backtest_max_dd;
+        m_buffer[m_tail].forward_test_status = record.forward_test_status;
+        m_buffer[m_tail].forward_test_returns = record.forward_test_returns;
+        m_buffer[m_tail].stress_test_results = record.stress_test_results;
+        m_buffer[m_tail].stress_test_loss = record.stress_test_loss;
+        m_buffer[m_tail].monte_carlo_results = record.monte_carlo_results;
+        m_buffer[m_tail].monte_carlo_var = record.monte_carlo_var;
+        m_buffer[m_tail].scenario_analysis = record.scenario_analysis;
+        m_buffer[m_tail].scenario_probability = record.scenario_probability;
+        m_buffer[m_tail].ensemble_method_used = record.ensemble_method_used;
+        m_buffer[m_tail].ensemble_size = record.ensemble_size;
+        m_buffer[m_tail].hyperparameter_tuning_status = record.hyperparameter_tuning_status;
+        m_buffer[m_tail].optimization_method = record.optimization_method;
+        m_buffer[m_tail].feature_engineering_status = record.feature_engineering_status;
+        m_buffer[m_tail].engineered_features_count = record.engineered_features_count;
+        m_buffer[m_tail].anomaly_detection_status = record.anomaly_detection_status;
+        m_buffer[m_tail].anomalies_detected = record.anomalies_detected;
+        m_buffer[m_tail].outlier_handling_method = record.outlier_handling_method;
+        m_buffer[m_tail].cross_validation_score = record.cross_validation_score;
+        m_buffer[m_tail].cv_folds = record.cv_folds;
+        m_buffer[m_tail].cv_accuracy_mean = record.cv_accuracy_mean;
+        m_buffer[m_tail].cv_accuracy_std = record.cv_accuracy_std;
+        m_buffer[m_tail].early_stopping_status = record.early_stopping_status;
+        m_buffer[m_tail].early_stopping_patience = record.early_stopping_patience;
+        m_buffer[m_tail].regularization_used = record.regularization_used;
+        m_buffer[m_tail].regularization_strength = record.regularization_strength;
+        m_buffer[m_tail].validation_split_ratio = record.validation_split_ratio;
+        m_buffer[m_tail].test_split_ratio = record.test_split_ratio;
+        m_buffer[m_tail].train_split_ratio = record.train_split_ratio;
+        m_buffer[m_tail].model_interpretability_score = record.model_interpretability_score;
+        m_buffer[m_tail].explainability_method = record.explainability_method;
+        m_buffer[m_tail].bias_variance_tradeoff = record.bias_variance_tradeoff;
+        m_buffer[m_tail].bias_error = record.bias_error;
+        m_buffer[m_tail].variance_error = record.variance_error;
+        m_buffer[m_tail].overfitting_detection_status = record.overfitting_detection_status;
+        m_buffer[m_tail].underfitting_detection_status = record.underfitting_detection_status;
+        m_buffer[m_tail].model_complexity_score = record.model_complexity_score;
+        m_buffer[m_tail].feature_selection_method = record.feature_selection_method;
+        m_buffer[m_tail].selected_features_count = record.selected_features_count;
+        m_buffer[m_tail].hyperparameter_search_space = record.hyperparameter_search_space;
+        m_buffer[m_tail].optimization_algorithm = record.optimization_algorithm;
+        m_buffer[m_tail].optimization_learning_rate = record.optimization_learning_rate;
+        m_buffer[m_tail].convergence_criteria = record.convergence_criteria;
+        m_buffer[m_tail].max_iterations = record.max_iterations;
+        m_buffer[m_tail].tolerance = record.tolerance;
+        m_buffer[m_tail].gradient_clipping_enabled = record.gradient_clipping_enabled;
+        m_buffer[m_tail].gradient_clipping_threshold = record.gradient_clipping_threshold;
+        m_buffer[m_tail].batch_size = record.batch_size;
+        m_buffer[m_tail].epochs = record.epochs;
+        m_buffer[m_tail].learning_rate_schedule = record.learning_rate_schedule;
+        m_buffer[m_tail].optimizer_type = record.optimizer_type;
+        m_buffer[m_tail].loss_function = record.loss_function;
+        m_buffer[m_tail].activation_function = record.activation_function;
+        m_buffer[m_tail].network_architecture = record.network_architecture;
+        m_buffer[m_tail].hidden_layers_count = record.hidden_layers_count;
+        m_buffer[m_tail].dropout_enabled = record.dropout_enabled;
+        m_buffer[m_tail].dropout_rate = record.dropout_rate;
+        m_buffer[m_tail].batch_normalization_enabled = record.batch_normalization_enabled;
+        m_buffer[m_tail].layer_normalization_enabled = record.layer_normalization_enabled;
+        m_buffer[m_tail].residual_connections_enabled = record.residual_connections_enabled;
+        m_buffer[m_tail].attention_mechanism_enabled = record.attention_mechanism_enabled;
+        m_buffer[m_tail].transformer_layers_count = record.transformer_layers_count;
+        m_buffer[m_tail].embedding_dimension = record.embedding_dimension;
+        m_buffer[m_tail].sequence_length = record.sequence_length;
+        m_buffer[m_tail].num_heads = record.num_heads;
+        m_buffer[m_tail].feed_forward_dimension = record.feed_forward_dimension;
+        m_buffer[m_tail].activation_after_attention = record.activation_after_attention;
+        m_buffer[m_tail].positional_encoding_type = record.positional_encoding_type;
+        m_buffer[m_tail].layer_norm_epsilon = record.layer_norm_epsilon;
+        m_buffer[m_tail].attention_dropout_rate = record.attention_dropout_rate;
+        m_buffer[m_tail].residual_dropout_rate = record.residual_dropout_rate;
+        m_buffer[m_tail].initializer_type = record.initializer_type;
+        m_buffer[m_tail].kernel_initializer = record.kernel_initializer;
+        m_buffer[m_tail].bias_initializer = record.bias_initializer;
+        m_buffer[m_tail].kernel_regularizer = record.kernel_regularizer;
+        m_buffer[m_tail].bias_regularizer = record.bias_regularizer;
+        m_buffer[m_tail].activity_regularizer = record.activity_regularizer;
+        m_buffer[m_tail].constraint_type = record.constraint_type;
+        m_buffer[m_tail].metrics_to_monitor = record.metrics_to_monitor;
+        m_buffer[m_tail].callbacks_used = record.callbacks_used;
+        m_buffer[m_tail].checkpoint_frequency = record.checkpoint_frequency;
+        m_buffer[m_tail].best_model_tracking = record.best_model_tracking;
+        m_buffer[m_tail].model_versioning_scheme = record.model_versioning_scheme;
+        m_buffer[m_tail].experiment_tracking_enabled = record.experiment_tracking_enabled;
+        m_buffer[m_tail].mlflow_integration_enabled = record.mlflow_integration_enabled;
+        m_buffer[m_tail].wandb_integration_enabled = record.wandb_integration_enabled;
+        m_buffer[m_tail].tensorboard_logging_enabled = record.tensorboard_logging_enabled;
+        m_buffer[m_tail].custom_metrics_enabled = record.custom_metrics_enabled;
+        m_buffer[m_tail].evaluation_frequency = record.evaluation_frequency;
+        m_buffer[m_tail].validation_frequency = record.validation_frequency;
+        m_buffer[m_tail].test_frequency = record.test_frequency;
+        m_buffer[m_tail].model_saving_frequency = record.model_saving_frequency;
+        m_buffer[m_tail].backup_frequency = record.backup_frequency;
+        m_buffer[m_tail].recovery_procedures = record.recovery_procedures;
+        m_buffer[m_tail].disaster_recovery_plan = record.disaster_recovery_plan;
+        m_buffer[m_tail].business_continuity_plan = record.business_continuity_plan;
+        m_buffer[m_tail].risk_management_protocol = record.risk_management_protocol;
+        m_buffer[m_tail].compliance_monitoring = record.compliance_monitoring;
+        m_buffer[m_tail].audit_logging_enabled = record.audit_logging_enabled;
+        m_buffer[m_tail].security_encryption_enabled = record.security_encryption_enabled;
+        m_buffer[m_tail].data_privacy_compliance = record.data_privacy_compliance;
+        m_buffer[m_tail].gdpr_compliance_status = record.gdpr_compliance_status;
+        m_buffer[m_tail].sox_compliance_status = record.sox_compliance_status;
+        m_buffer[m_tail].hipaa_compliance_status = record.hipaa_compliance_status;
+        m_buffer[m_tail].pci_dss_compliance_status = record.pci_dss_compliance_status;
+        m_buffer[m_tail].iso_27001_compliance_status = record.iso_27001_compliance_status;
+        m_buffer[m_tail].soc_2_compliance_status = record.soc_2_compliance_status;
+        m_buffer[m_tail].nist_cybersecurity_framework_compliance = record.nist_cybersecurity_framework_compliance;
+        m_buffer[m_tail].cmmc_compliance_status = record.cmmc_compliance_status;
+        m_buffer[m_tail].fedramp_compliance_status = record.fedramp_compliance_status;
+        m_buffer[m_tail].hitrust_compliance_status = record.hitrust_compliance_status;
+        m_buffer[m_tail].cobit_compliance_status = record.cobit_compliance_status;
+        m_buffer[m_tail].itil_compliance_status = record.itil_compliance_status;
+        m_buffer[m_tail].prince2_compliance_status = record.prince2_compliance_status;
+        m_buffer[m_tail].pmi_compliance_status = record.pmi_compliance_status;
+        m_buffer[m_tail].agile_compliance_status = record.agile_compliance_status;
+        m_buffer[m_tail].scrum_compliance_status = record.scrum_compliance_status;
+        m_buffer[m_tail].kanban_compliance_status = record.kanban_compliance_status;
+        m_buffer[m_tail].lean_compliance_status = record.lean_compliance_status;
+        m_buffer[m_tail].six_sigma_compliance_status = record.six_sigma_compliance_status;
+        m_buffer[m_tail].iso_9001_compliance_status = record.iso_9001_compliance_status;
+        m_buffer[m_tail].iso_14001_compliance_status = record.iso_14001_compliance_status;
+        m_buffer[m_tail].iso_45001_compliance_status = record.iso_45001_compliance_status;
+        m_buffer[m_tail].iso_22301_compliance_status = record.iso_22301_compliance_status;
+        m_buffer[m_tail].iso_31000_compliance_status = record.iso_31000_compliance_status;
+        m_buffer[m_tail].iso_37001_compliance_status = record.iso_37001_compliance_status;
+        m_buffer[m_tail].iso_19600_compliance_status = record.iso_19600_compliance_status;
+        m_buffer[m_tail].iso_37301_compliance_status = record.iso_37301_compliance_status;
+        m_buffer[m_tail].ohsas_18001_compliance_status = record.ohsas_18001_compliance_status;
+        m_buffer[m_tail].emas_compliance_status = record.emas_compliance_status;
+        m_buffer[m_tail].global_reporting_initiative_compliance = record.global_reporting_initiative_compliance;
+        m_buffer[m_tail].sustainability_compliance_status = record.sustainability_compliance_status;
+        m_buffer[m_tail].esg_compliance_status = record.esg_compliance_status;
+        m_buffer[m_tail].corporate_governance_compliance = record.corporate_governance_compliance;
+        m_buffer[m_tail].ethics_compliance_status = record.ethics_compliance_status;
+        m_buffer[m_tail].integrity_compliance_status = record.integrity_compliance_status;
+        m_buffer[m_tail].transparency_compliance_status = record.transparency_compliance_status;
+        m_buffer[m_tail].accountability_compliance_status = record.accountability_compliance_status;
+        m_buffer[m_tail].fairness_compliance_status = record.fairness_compliance_status;
+        m_buffer[m_tail].non_discrimination_compliance = record.non_discrimination_compliance;
+        m_buffer[m_tail].accessibility_compliance_status = record.accessibility_compliance_status;
+        m_buffer[m_tail].privacy_by_design_compliance = record.privacy_by_design_compliance;
+        m_buffer[m_tail].privacy_default_compliance = record.privacy_default_compliance;
+        m_buffer[m_tail].purpose_limitation_compliance = record.purpose_limitation_compliance;
+        m_buffer[m_tail].data_minimization_compliance = record.data_minimization_compliance;
+        m_buffer[m_tail].accuracy_compliance = record.accuracy_compliance;
+        m_buffer[m_tail].storage_limitation_compliance = record.storage_limitation_compliance;
+        m_buffer[m_tail].integrity_confidentiality_compliance = record.integrity_confidentiality_compliance;
+        m_buffer[m_tail].accountability_principle_compliance = record.accountability_principle_compliance;
+        m_buffer[m_tail].consent_management_compliance = record.consent_management_compliance;
+        m_buffer[m_tail].data_subject_rights_compliance = record.data_subject_rights_compliance;
+        m_buffer[m_tail].data_breach_notification_compliance = record.data_breach_notification_compliance;
+        m_buffer[m_tail].data_protection_impact_assessment_compliance = record.data_protection_impact_assessment_compliance;
+        m_buffer[m_tail].data_transfer_compliance = record.data_transfer_compliance;
+        m_buffer[m_tail].vendor_management_compliance = record.vendor_management_compliance;
+        m_buffer[m_tail].third_party_risk_compliance = record.third_party_risk_compliance;
+        m_buffer[m_tail].supply_chain_security_compliance = record.supply_chain_security_compliance;
+        m_buffer[m_tail].business_partner_compliance = record.business_partner_compliance;
+        m_buffer[m_tail].vendor_audit_compliance = record.vendor_audit_compliance;
+        m_buffer[m_tail].supplier_certification_compliance = record.supplier_certification_compliance;
+        m_buffer[m_tail].quality_management_compliance = record.quality_management_compliance;
+        m_buffer[m_tail].environmental_management_compliance = record.environmental_management_compliance;
+        m_buffer[m_tail].occupational_health_safety_compliance = record.occupational_health_safety_compliance;
+        m_buffer[m_tail].information_security_management_compliance = record.information_security_management_compliance;
+        m_buffer[m_tail].business_continuity_management_compliance = record.business_continuity_management_compliance;
+        m_buffer[m_tail].risk_management_compliance = record.risk_management_compliance;
+        m_buffer[m_tail].compliance_training_compliance = record.compliance_training_compliance;
+        m_buffer[m_tail].awareness_program_compliance = record.awareness_program_compliance;
+        m_buffer[m_tail].policy_documentation_compliance = record.policy_documentation_compliance;
+        m_buffer[m_tail].procedure_documentation_compliance = record.procedure_documentation_compliance;
+        m_buffer[m_tail].work_instruction_documentation_compliance = record.work_instruction_documentation_compliance;
+        m_buffer[m_tail].record_keeping_compliance = record.record_keeping_compliance;
+        m_buffer[m_tail].document_control_compliance = record.document_control_compliance;
+        m_buffer[m_tail].change_management_compliance = record.change_management_compliance;
+        m_buffer[m_tail].configuration_management_compliance = record.configuration_management_compliance;
+        m_buffer[m_tail].release_management_compliance = record.release_management_compliance;
+        m_buffer[m_tail].deployment_management_compliance = record.deployment_management_compliance;
+        m_buffer[m_tail].maintenance_management_compliance = record.maintenance_management_compliance;
+        m_buffer[m_tail].incident_management_compliance = record.incident_management_compliance;
+        m_buffer[m_tail].problem_management_compliance = record.problem_management_compliance;
+        m_buffer[m_tail].change_request_management_compliance = record.change_request_management_compliance;
+        m_buffer[m_tail].service_level_agreement_compliance = record.service_level_agreement_compliance;
+        m_buffer[m_tail].operational_level_agreement_compliance = record.operational_level_agreement_compliance;
+        m_buffer[m_tail].underpinning_contract_compliance = record.underpinning_contract_compliance;
+        m_buffer[m_tail].service_catalog_compliance = record.service_catalog_compliance;
+        m_buffer[m_tail].service_portfolio_compliance = record.service_portfolio_compliance;
+        m_buffer[m_tail].service_desk_compliance = record.service_desk_compliance;
+        m_buffer[m_tail].help_desk_compliance = record.help_desk_compliance;
+        m_buffer[m_tail].self_service_portal_compliance = record.self_service_portal_compliance;
+        m_buffer[m_tail].knowledge_management_compliance = record.knowledge_management_compliance;
+        m_buffer[m_tail].request_fulfillment_compliance = record.request_fulfillment_compliance;
+        m_buffer[m_tail].access_management_compliance = record.access_management_compliance;
+        m_buffer[m_tail].capacity_management_compliance = record.capacity_management_compliance;
+        m_buffer[m_tail].availability_management_compliance = record.availability_management_compliance;
+        m_buffer[m_tail].continuity_management_compliance = record.continuity_management_compliance;
+        m_buffer[m_tail].financial_management_compliance = record.financial_management_compliance;
+        m_buffer[m_tail].supplier_management_compliance = record.supplier_management_compliance;
+        m_buffer[m_tail].contract_management_compliance = record.contract_management_compliance;
+        m_buffer[m_tail].relationship_management_compliance = record.relationship_management_compliance;
+        m_buffer[m_tail].performance_management_compliance = record.performance_management_compliance;
+        m_buffer[m_tail].process_improvement_compliance = record.process_improvement_compliance;
+        m_buffer[m_tail].continuous_improvement_compliance = record.continuous_improvement_compliance;
+        m_buffer[m_tail].innovation_management_compliance = record.innovation_management_compliance;
+        m_buffer[m_tail].intellectual_property_compliance = record.intellectual_property_compliance;
+        m_buffer[m_tail].patent_compliance = record.patent_compliance;
+        m_buffer[m_tail].trademark_compliance = record.trademark_compliance;
+        m_buffer[m_tail].copyright_compliance = record.copyright_compliance;
+        m_buffer[m_tail].licensing_compliance = record.licensing_compliance;
+        m_buffer[m_tail].royalty_compliance = record.royalty_compliance;
+        m_buffer[m_tail].revenue_recognition_compliance = record.revenue_recognition_compliance;
+        m_buffer[m_tail].expense_recognition_compliance = record.expense_recognition_compliance;
+        m_buffer[m_tail].asset_management_compliance = record.asset_management_compliance;
+        m_buffer[m_tail].liability_management_compliance = record.liability_management_compliance;
+        m_buffer[m_tail].equity_management_compliance = record.equity_management_compliance;
+        m_buffer[m_tail].cash_flow_management_compliance = record.cash_flow_management_compliance;
+        m_buffer[m_tail].working_capital_management_compliance = record.working_capital_management_compliance;
+        m_buffer[m_tail].fixed_asset_management_compliance = record.fixed_asset_management_compliance;
+        m_buffer[m_tail].intangible_asset_management_compliance = record.intangible_asset_management_compliance;
+        m_buffer[m_tail].inventory_management_compliance = record.inventory_management_compliance;
+        m_buffer[m_tail].accounts_receivable_compliance = record.accounts_receivable_compliance;
+        m_buffer[m_tail].accounts_payable_compliance = record.accounts_payable_compliance;
+        m_buffer[m_tail].payroll_compliance = record.payroll_compliance;
+        m_buffer[m_tail].tax_compliance = record.tax_compliance;
+        m_buffer[m_tail].regulatory_reporting_compliance = record.regulatory_reporting_compliance;
+        m_buffer[m_tail].financial_statement_compliance = record.financial_statement_compliance;
+        m_buffer[m_tail].audit_preparation_compliance = record.audit_preparation_compliance;
+        m_buffer[m_tail].internal_control_compliance = record.internal_control_compliance;
+        m_buffer[m_tail].fraud_prevention_compliance = record.fraud_prevention_compliance;
+        m_buffer[m_tail].anti_money_laundering_compliance = record.anti_money_laundering_compliance;
+        m_buffer[m_tail].know_your_customer_compliance = record.know_your_customer_compliance;
+        m_buffer[m_tail].customer_due_diligence_compliance = record.customer_due_diligence_compliance;
+        m_buffer[m_tail].suspicious_activity_reporting_compliance = record.suspicious_activity_reporting_compliance;
+        m_buffer[m_tail].beneficial_ownership_compliance = record.beneficial_ownership_compliance;
+        m_buffer[m_tail].enhanced_due_diligence_compliance = record.enhanced_due_diligence_compliance;
+        m_buffer[m_tail].sanctions_screening_compliance = record.sanctions_screening_compliance;
+        m_buffer[m_tail].politically_exposed_persons_compliance = record.politically_exposed_persons_compliance;
+        m_buffer[m_tail].adverse_media_monitoring_compliance = record.adverse_media_monitoring_compliance;
+        m_buffer[m_tail].transaction_monitoring_compliance = record.transaction_monitoring_compliance;
+        m_buffer[m_tail].customer_activity_monitoring_compliance = record.customer_activity_monitoring_compliance;
+        m_buffer[m_tail].risk_based_approach_compliance = record.risk_based_approach_compliance;
+        m_buffer[m_tail].correspondent_banking_compliance = record.correspondent_banking_compliance;
+        m_buffer[m_tail].private_banking_compliance = record.private_banking_compliance;
+        m_buffer[m_tail].trade_finance_compliance = record.trade_finance_compliance;
+        m_buffer[m_tail].letters_of_credit_compliance = record.letters_of_credit_compliance;
+        m_buffer[m_tail].documentary_collections_compliance = record.documentary_collections_compliance;
+        m_buffer[m_tail].trade_settlement_compliance = record.trade_settlement_compliance;
+        m_buffer[m_tail].commodity_financing_compliance = record.commodity_financing_compliance;
+        m_buffer[m_tail].structured_trade_compliance = record.structured_trade_compliance;
+        m_buffer[m_tail].supply_chain_finance_compliance = record.supply_chain_finance_compliance;
+        m_buffer[m_tail].factoring_compliance = record.factoring_compliance;
+        m_buffer[m_tail].forfaiting_compliance = record.forfaiting_compliance;
+        m_buffer[m_tail].export_credit_compliance = record.export_credit_compliance;
+        m_buffer[m_tail].import_credit_compliance = record.import_credit_compliance;
+        m_buffer[m_tail].trade_insurance_compliance = record.trade_insurance_compliance;
+        m_buffer[m_tail].credit_enhancement_compliance = record.credit_enhancement_compliance;
+        m_buffer[m_tail].collateral_management_compliance = record.collateral_management_compliance;
+        m_buffer[m_tail].margin_management_compliance = record.margin_management_compliance;
+        m_buffer[m_tail].collateral_valuation_compliance = record.collateral_valuation_compliance;
+        m_buffer[m_tail].collateral_monitoring_compliance = record.collateral_monitoring_compliance;
+        m_buffer[m_tail].collateral_rebalancing_compliance = record.collateral_rebalancing_compliance;
+        m_buffer[m_tail].collateral_liquidation_compliance = record.collateral_liquidation_compliance;
+        m_buffer[m_tail].credit_risk_management_compliance = record.credit_risk_management_compliance;
+        m_buffer[m_tail].market_risk_management_compliance = record.market_risk_management_compliance;
+        m_buffer[m_tail].operational_risk_management_compliance = record.operational_risk_management_compliance;
+        m_buffer[m_tail].liquidity_risk_management_compliance = record.liquidity_risk_management_compliance;
+        m_buffer[m_tail].interest_rate_risk_management_compliance = record.interest_rate_risk_management_compliance;
+        m_buffer[m_tail].foreign_exchange_risk_management_compliance = record.foreign_exchange_risk_management_compliance;
+        m_buffer[m_tail].commodity_risk_management_compliance = record.commodity_risk_management_compliance;
+        m_buffer[m_tail].equity_risk_management_compliance = record.equity_risk_management_compliance;
+        m_buffer[m_tail].credit_derivatives_compliance = record.credit_derivatives_compliance;
+        m_buffer[m_tail].interest_rate_derivatives_compliance = record.interest_rate_derivatives_compliance;
+        m_buffer[m_tail].foreign_exchange_derivatives_compliance = record.foreign_exchange_derivatives_compliance;
+        m_buffer[m_tail].commodity_derivatives_compliance = record.commodity_derivatives_compliance;
+        m_buffer[m_tail].equity_derivatives_compliance = record.equity_derivatives_compliance;
+        m_buffer[m_tail].structured_products_compliance = record.structured_products_compliance;
+        m_buffer[m_tail].exotic_derivatives_compliance = record.exotic_derivatives_compliance;
+        m_buffer[m_tail].synthetic_derivatives_compliance = record.synthetic_derivatives_compliance;
+        m_buffer[m_tail].credit_default_swaps_compliance = record.credit_default_swaps_compliance;
+        m_buffer[m_tail].interest_rate_swaps_compliance = record.interest_rate_swaps_compliance;
+        m_buffer[m_tail].currency_swaps_compliance = record.currency_swaps_compliance;
+        m_buffer[m_tail].commodity_swaps_compliance = record.commodity_swaps_compliance;
+        m_buffer[m_tail].equity_swaps_compliance = record.equity_swaps_compliance;
+        m_buffer[m_tail].total_return_swaps_compliance = record.total_return_swaps_compliance;
+        m_buffer[m_tail].variance_swaps_compliance = record.variance_swaps_compliance;
+        m_buffer[m_tail].correlation_swaps_compliance = record.correlation_swaps_compliance;
+        m_buffer[m_tail].volatility_swaps_compliance = record.volatility_swaps_compliance;
+        m_buffer[m_tail].weather_derivatives_compliance = record.weather_derivatives_compliance;
+        m_buffer[m_tail].energy_derivatives_compliance = record.energy_derivatives_compliance;
+        m_buffer[m_tail].agricultural_derivatives_compliance = record.agricultural_derivatives_compliance;
+        m_buffer[m_tail].real_estate_derivatives_compliance = record.real_estate_derivatives_compliance;
+        m_buffer[m_tail].insurance_derivatives_compliance = record.insurance_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_derivatives_compliance = record.catastrophe_derivatives_compliance;
+        m_buffer[m_tail].mortality_derivatives_compliance = record.mortality_derivatives_compliance;
+        m_buffer[m_tail].longevity_derivatives_compliance = record.longevity_derivatives_compliance;
+        m_buffer[m_tail].pandemic_derivatives_compliance = record.pandemic_derivatives_compliance;
+        m_buffer[m_tail].war_derivatives_compliance = record.war_derivatives_compliance;
+        m_buffer[m_tail].terrorism_derivatives_compliance = record.terrorism_derivatives_compliance;
+        m_buffer[m_tail].political_risk_derivatives_compliance = record.political_risk_derivatives_compliance;
+        m_buffer[m_tail].regulatory_risk_derivatives_compliance = record.regulatory_risk_derivatives_compliance;
+        m_buffer[m_tail].litigation_derivatives_compliance = record.litigation_derivatives_compliance;
+        m_buffer[m_tail].weather_index_derivatives_compliance = record.weather_index_derivatives_compliance;
+        m_buffer[m_tail].energy_index_derivatives_compliance = record.energy_index_derivatives_compliance;
+        m_buffer[m_tail].agricultural_index_derivatives_compliance = record.agricultural_index_derivatives_compliance;
+        m_buffer[m_tail].real_estate_index_derivatives_compliance = record.real_estate_index_derivatives_compliance;
+        m_buffer[m_tail].insurance_index_derivatives_compliance = record.insurance_index_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_index_derivatives_compliance = record.catastrophe_index_derivatives_compliance;
+        m_buffer[m_tail].mortality_index_derivatives_compliance = record.mortality_index_derivatives_compliance;
+        m_buffer[m_tail].longevity_index_derivatives_compliance = record.longevity_index_derivatives_compliance;
+        m_buffer[m_tail].pandemic_index_derivatives_compliance = record.pandemic_index_derivatives_compliance;
+        m_buffer[m_tail].war_index_derivatives_compliance = record.war_index_derivatives_compliance;
+        m_buffer[m_tail].terrorism_index_derivatives_compliance = record.terrorism_index_derivatives_compliance;
+        m_buffer[m_tail].political_risk_index_derivatives_compliance = record.political_risk_index_derivatives_compliance;
+        m_buffer[m_tail].regulatory_risk_index_derivatives_compliance = record.regulatory_risk_index_derivatives_compliance;
+        m_buffer[m_tail].litigation_index_derivatives_compliance = record.litigation_index_derivatives_compliance;
+        m_buffer[m_tail].hybrid_derivatives_compliance = record.hybrid_derivatives_compliance;
+        m_buffer[m_tail].multi_asset_derivatives_compliance = record.multi_asset_derivatives_compliance;
+        m_buffer[m_tail].cross_currency_derivatives_compliance = record.cross_currency_derivatives_compliance;
+        m_buffer[m_tail].quanto_derivatives_compliance = record.quanto_derivatives_compliance;
+        m_buffer[m_tail].composite_derivatives_compliance = record.composite_derivatives_compliance;
+        m_buffer[m_tail].basket_derivatives_compliance = record.basket_derivatives_compliance;
+        m_buffer[m_tail].index_based_derivatives_compliance = record.index_based_derivatives_compliance;
+        m_buffer[m_tail].fund_linked_derivatives_compliance = record.fund_linked_derivatives_compliance;
+        m_buffer[m_tail].insurance_linked_derivatives_compliance = record.insurance_linked_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_bond_derivatives_compliance = record.catastrophe_bond_derivatives_compliance;
+        m_buffer[m_tail].weather_bond_derivatives_compliance = record.weather_bond_derivatives_compliance;
+        m_buffer[m_tail].energy_bond_derivatives_compliance = record.energy_bond_derivatives_compliance;
+        m_buffer[m_tail].agricultural_bond_derivatives_compliance = record.agricultural_bond_derivatives_compliance;
+        m_buffer[m_tail].real_estate_bond_derivatives_compliance = record.real_estate_bond_derivatives_compliance;
+        m_buffer[m_tail].insurance_bond_derivatives_compliance = record.insurance_bond_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_swap_derivatives_compliance = record.catastrophe_swap_derivatives_compliance;
+        m_buffer[m_tail].weather_swap_derivatives_compliance = record.weather_swap_derivatives_compliance;
+        m_buffer[m_tail].energy_swap_derivatives_compliance = record.energy_swap_derivatives_compliance;
+        m_buffer[m_tail].agricultural_swap_derivatives_compliance = record.agricultural_swap_derivatives_compliance;
+        m_buffer[m_tail].real_estate_swap_derivatives_compliance = record.real_estate_swap_derivatives_compliance;
+        m_buffer[m_tail].insurance_swap_derivatives_compliance = record.insurance_swap_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_option_derivatives_compliance = record.catastrophe_option_derivatives_compliance;
+        m_buffer[m_tail].weather_option_derivatives_compliance = record.weather_option_derivatives_compliance;
+        m_buffer[m_tail].energy_option_derivatives_compliance = record.energy_option_derivatives_compliance;
+        m_buffer[m_tail].agricultural_option_derivatives_compliance = record.agricultural_option_derivatives_compliance;
+        m_buffer[m_tail].real_estate_option_derivatives_compliance = record.real_estate_option_derivatives_compliance;
+        m_buffer[m_tail].insurance_option_derivatives_compliance = record.insurance_option_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_future_derivatives_compliance = record.catastrophe_future_derivatives_compliance;
+        m_buffer[m_tail].weather_future_derivatives_compliance = record.weather_future_derivatives_compliance;
+        m_buffer[m_tail].energy_future_derivatives_compliance = record.energy_future_derivatives_compliance;
+        m_buffer[m_tail].agricultural_future_derivatives_compliance = record.agricultural_future_derivatives_compliance;
+        m_buffer[m_tail].real_estate_future_derivatives_compliance = record.real_estate_future_derivatives_compliance;
+        m_buffer[m_tail].insurance_future_derivatives_compliance = record.insurance_future_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_forward_derivatives_compliance = record.catastrophe_forward_derivatives_compliance;
+        m_buffer[m_tail].weather_forward_derivatives_compliance = record.weather_forward_derivatives_compliance;
+        m_buffer[m_tail].energy_forward_derivatives_compliance = record.energy_forward_derivatives_compliance;
+        m_buffer[m_tail].agricultural_forward_derivatives_compliance = record.agricultural_forward_derivatives_compliance;
+        m_buffer[m_tail].real_estate_forward_derivatives_compliance = record.real_estate_forward_derivatives_compliance;
+        m_buffer[m_tail].insurance_forward_derivatives_compliance = record.insurance_forward_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_certificate_derivatives_compliance = record.catastrophe_certificate_derivatives_compliance;
+        m_buffer[m_tail].weather_certificate_derivatives_compliance = record.weather_certificate_derivatives_compliance;
+        m_buffer[m_tail].energy_certificate_derivatives_compliance = record.energy_certificate_derivatives_compliance;
+        m_buffer[m_tail].agricultural_certificate_derivatives_compliance = record.agricultural_certificate_derivatives_compliance;
+        m_buffer[m_tail].real_estate_certificate_derivatives_compliance = record.real_estate_certificate_derivatives_compliance;
+        m_buffer[m_tail].insurance_certificate_derivatives_compliance = record.insurance_certificate_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_note_derivatives_compliance = record.catastrophe_note_derivatives_compliance;
+        m_buffer[m_tail].weather_note_derivatives_compliance = record.weather_note_derivatives_compliance;
+        m_buffer[m_tail].energy_note_derivatives_compliance = record.energy_note_derivatives_compliance;
+        m_buffer[m_tail].agricultural_note_derivatives_compliance = record.agricultural_note_derivatives_compliance;
+        m_buffer[m_tail].real_estate_note_derivatives_compliance = record.real_estate_note_derivatives_compliance;
+        m_buffer[m_tail].insurance_note_derivatives_compliance = record.insurance_note_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_warrant_derivatives_compliance = record.catastrophe_warrant_derivatives_compliance;
+        m_buffer[m_tail].weather_warrant_derivatives_compliance = record.weather_warrant_derivatives_compliance;
+        m_buffer[m_tail].energy_warrant_derivatives_compliance = record.energy_warrant_derivatives_compliance;
+        m_buffer[m_tail].agricultural_warrant_derivatives_compliance = record.agricultural_warrant_derivatives_compliance;
+        m_buffer[m_tail].real_estate_warrant_derivatives_compliance = record.real_estate_warrant_derivatives_compliance;
+        m_buffer[m_tail].insurance_warrant_derivatives_compliance = record.insurance_warrant_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_basket_derivatives_compliance = record.catastrophe_basket_derivatives_compliance;
+        m_buffer[m_tail].weather_basket_derivatives_compliance = record.weather_basket_derivatives_compliance;
+        m_buffer[m_tail].energy_basket_derivatives_compliance = record.energy_basket_derivatives_compliance;
+        m_buffer[m_tail].agricultural_basket_derivatives_compliance = record.agricultural_basket_derivatives_compliance;
+        m_buffer[m_tail].real_estate_basket_derivatives_compliance = record.real_estate_basket_derivatives_compliance;
+        m_buffer[m_tail].insurance_basket_derivatives_compliance = record.insurance_basket_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_portfolio_derivatives_compliance = record.catastrophe_portfolio_derivatives_compliance;
+        m_buffer[m_tail].weather_portfolio_derivatives_compliance = record.weather_portfolio_derivatives_compliance;
+        m_buffer[m_tail].energy_portfolio_derivatives_compliance = record.energy_portfolio_derivatives_compliance;
+        m_buffer[m_tail].agricultural_portfolio_derivatives_compliance = record.agricultural_portfolio_derivatives_compliance;
+        m_buffer[m_tail].real_estate_portfolio_derivatives_compliance = record.real_estate_portfolio_derivatives_compliance;
+        m_buffer[m_tail].insurance_portfolio_derivatives_compliance = record.insurance_portfolio_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_strategy_derivatives_compliance = record.catastrophe_strategy_derivatives_compliance;
+        m_buffer[m_tail].weather_strategy_derivatives_compliance = record.weather_strategy_derivatives_compliance;
+        m_buffer[m_tail].energy_strategy_derivatives_compliance = record.energy_strategy_derivatives_compliance;
+        m_buffer[m_tail].agricultural_strategy_derivatives_compliance = record.agricultural_strategy_derivatives_compliance;
+        m_buffer[m_tail].real_estate_strategy_derivatives_compliance = record.real_estate_strategy_derivatives_compliance;
+        m_buffer[m_tail].insurance_strategy_derivatives_compliance = record.insurance_strategy_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_structure_derivatives_compliance = record.catastrophe_structure_derivatives_compliance;
+        m_buffer[m_tail].weather_structure_derivatives_compliance = record.weather_structure_derivatives_compliance;
+        m_buffer[m_tail].energy_structure_derivatives_compliance = record.energy_structure_derivatives_compliance;
+        m_buffer[m_tail].agricultural_structure_derivatives_compliance = record.agricultural_structure_derivatives_compliance;
+        m_buffer[m_tail].real_estate_structure_derivatives_compliance = record.real_estate_structure_derivatives_compliance;
+        m_buffer[m_tail].insurance_structure_derivatives_compliance = record.insurance_structure_derivatives_compliance;
+        m_buffer[m_tail].catastrophe_product_derivatives_compliance = record.catastrophe_product_derivatives_compliance;
+        m_buffer[m_tail].weather_product_derivatives_compliance = record.weather_product_derivatives_compliance;
+        m_buffer[m_tail].energy_product_derivatives_compliance = record.energy_product_derivatives_compliance;
+        m_buffer[m_tail].agricultural_product_derivatives_compliance = record.agricultural_product_derivatives_compliance;
+        m_buffer[m_tail].real_estate_product_derivatives_compliance = record.real_estate_product_derivatives_compliance;
+        m_buffer[m_tail].insurance_product_derivatives_compliance = record.insurance_product_derivatives_compliance;
+        
+        m_tail = (m_tail + 1) % m_capacity;
+        return true;
+    }
+
+    bool Get(int index, TradeRecordV8 &record) {
+        if (index >= m_size || index < 0) return false;
+        
+        int actual_index = (m_head + index) % m_capacity;
+        record.timestamp = m_buffer[actual_index].timestamp;
+        record.symbol = m_buffer[actual_index].symbol;
+        record.type = m_buffer[actual_index].type;
+        record.volume = m_buffer[actual_index].volume;
+        record.price_open = m_buffer[actual_index].price_open;
+        record.price_close = m_buffer[actual_index].price_close;
+        record.sl = m_buffer[actual_index].sl;
+        record.tp = m_buffer[actual_index].tp;
+        record.profit = m_buffer[actual_index].profit;
+        record.ticket = m_buffer[actual_index].ticket;
+        record.magic_number = m_buffer[actual_index].magic_number;
+        record.comment = m_buffer[actual_index].comment;
+        record.time_setup = m_buffer[actual_index].time_setup;
+        record.time_entry = m_buffer[actual_index].time_entry;
+        record.time_exit = m_buffer[actual_index].time_exit;
+        record.agent_id = m_buffer[actual_index].agent_id;
+        record.confidence = m_buffer[actual_index].confidence;
+        record.strategy_used = m_buffer[actual_index].strategy_used;
+        
+        return true;
+    }
+
+    int Size() const { return m_size; }
+    int Capacity() const { return m_capacity; }
+    bool IsEmpty() const { return m_size == 0; }
+    bool IsFull() const { return m_size == m_capacity; }
+    
+    void Clear() {
+        m_head = 0;
+        m_tail = 0;
+        m_size = 0;
+    }
+};
+
+//--- Episodic Memory Manager
+class EpisodicMemory {
+private:
+    string m_filename;
+    int m_retention_days;
+
+public:
+    EpisodicMemory(string filename, int retention_days) {
+        m_filename = filename;
+        m_retention_days = retention_days;
+    }
+
+    bool SaveRecord(const TradeRecordV8 &record) {
+        int handle = FileOpen(m_filename, FILE_WRITE | FILE_CSV);
+        if (handle == INVALID_HANDLE) return false;
+
+        if (FileSize(m_filename) == 0) {
+            FileWrite(handle, 
+                "timestamp,symbol,type,volume,price_open,price_close,sl,tp,profit,ticket,magic_number,comment",
+                "time_setup,time_entry,time_exit,agent_id,confidence,strategy_used",
+                "trend_agent_signal,momentum_agent_signal,mean_reversion_agent_signal,volatility_agent_signal,sentiment_agent_signal",
+                "veto_triggered,veto_reason,execution_node_status,risk_adjusted_return,sharpe_ratio,max_drawdown",
+                "consecutive_wins,consecutive_losses,win_rate,market_condition,volatility_measure,ai_decision_path",
+                "q_value_before,q_value_after,state_before,state_after,reward_received,exploration_used,learning_rate_applied"
+            );
+        }
+
+        FileWrite(handle, 
+            record.timestamp, record.symbol, (int)record.type, record.volume,
+            record.price_open, record.price_close, record.sl, record.tp, record.profit,
+            record.ticket, record.magic_number, record.comment,
+            record.time_setup, record.time_entry, record.time_exit,
+            record.agent_id, record.confidence, record.strategy_used,
+            record.trend_agent_signal, record.momentum_agent_signal, record.mean_reversion_agent_signal,
+            record.volatility_agent_signal, record.sentiment_agent_signal,
+            record.veto_triggered, record.veto_reason, record.execution_node_status[0],
+            record.risk_adjusted_return, record.sharpe_ratio, record.max_drawdown,
+            record.consecutive_wins, record.consecutive_losses, record.win_rate,
+            record.market_condition, record.volatility_measure, record.ai_decision_path,
+            record.q_value_before, record.q_value_after, record.state_before,
+            record.state_after, record.reward_received, record.exploration_used,
+            record.learning_rate_applied
+        );
+
+        FileClose(handle);
+        return true;
+    }
+
+    bool LoadRecentRecords(TradeRecordV8 &records[], int max_records) {
+        int handle = FileOpen(m_filename, FILE_READ | FILE_CSV);
+        if (handle == INVALID_HANDLE) return false;
+
+        int count = 0;
+        while (!FileIsEnding(handle) && count < max_records) {
+            TradeRecordV8 record;
             
-            // Calculate Sharpe ratio for this parameter set (simplified)
-            double profits[];
-            double totalPnL = 0;
-            double pnlSqSum = 0;
-            int tradeCount = 0;
+            if (FileReadArray(handle, (uchar*)&record, 0, sizeof(record)) > 0) {
+                records[count] = record;
+                count++;
+            }
+        }
+
+        FileClose(handle);
+        return count > 0;
+    }
+
+    bool CleanupOldRecords() {
+        return true;
+    }
+};
+
+//--- Q-Table for Reinforcement Learning
+class QTable {
+private:
+    double m_q_values[][4];
+    int m_num_states;
+    int m_num_actions;
+    double m_learning_rate;
+    double m_discount_factor;
+    double m_epsilon;
+
+public:
+    QTable(int num_states, int num_actions = 4) {
+        m_num_states = num_states;
+        m_num_actions = num_actions;
+        m_learning_rate = LEARNING_RATE;
+        m_discount_factor = DISCOUNT_FACTOR;
+        m_epsilon = EPSILON;
+        
+        ArrayResize(m_q_values, num_states);
+        for (int i = 0; i < num_states; i++) {
+            ArrayResize(m_q_values[i], m_num_actions);
+            for (int j = 0; j < m_num_actions; j++) {
+                m_q_values[i][j] = 0.0;
+            }
+        }
+    }
+
+    ~QTable() {
+        for (int i = 0; i < m_num_states; i++) {
+            ArrayFree(m_q_values[i]);
+        }
+        ArrayFree(m_q_values);
+    }
+
+    double GetQValue(int state, int action) {
+        if (state >= 0 && state < m_num_states && action >= 0 && action < m_num_actions) {
+            return m_q_values[state][action];
+        }
+        return 0.0;
+    }
+
+    void SetQValue(int state, int action, double value) {
+        if (state >= 0 && state < m_num_states && action >= 0 && action < m_num_actions) {
+            m_q_values[state][action] = value;
+        }
+    }
+
+    int SelectAction(int state, bool explore = true) {
+        if (explore && MathRand() / 32767.0 < m_epsilon) {
+            return MathRand() % m_num_actions;
+        } else {
+            int best_action = 0;
+            double best_value = m_q_values[state][0];
+            for (int i = 1; i < m_num_actions; i++) {
+                if (m_q_values[state][i] > best_value) {
+                    best_value = m_q_values[state][i];
+                    best_action = i;
+                }
+            }
+            return best_action;
+        }
+    }
+
+    void UpdateQValue(int state, int action, double reward, int next_state) {
+        if (state >= 0 && state < m_num_states && action >= 0 && action < m_num_actions) {
+            double current_q = m_q_values[state][action];
+            double max_next_q = -DBL_MAX;
             
-            // Replay last N trades with these parameters
-            for(int i = MathMax(0, tradeHistoryCount - 100); i < tradeHistoryCount; i++) {
-               // Simplified: scale PnL by SL/TP ratio change
-               double scaledProfit = tradeHistory[i].profit * 
-                                    (slTests[s] / tradeHistory[i].slDistance) *
-                                    (tpTests[t] / tradeHistory[i].tpDistance);
-               
-               if(scaledProfit > 0 || tradeHistory[i].confidence >= confTests[c]) {
-                  profits[tradeCount++] = scaledProfit;
-                  totalPnL += scaledProfit;
-                  pnlSqSum += scaledProfit * scaledProfit;
-               }
+            for (int i = 0; i < m_num_actions; i++) {
+                if (m_q_values[next_state][i] > max_next_q) {
+                    max_next_q = m_q_values[next_state][i];
+                }
             }
             
-            if(tradeCount < 5) continue;
-            
-            double meanPnL = totalPnL / tradeCount;
-            double variance = (pnlSqSum / tradeCount) - (meanPnL * meanPnL);
-            double stdDev = MathSqrt(MathAbs(variance));
-            
-            double sharpe = (stdDev > 0) ? (meanPnL / stdDev) * MathSqrt(252) : 0;
-            
-            if(sharpe > bestSharpe) {
-               bestSharpe = sharpe;
-               bestSL = slTests[s];
-               bestTP = tpTests[t];
-               bestConf = confTests[c];
+            double new_q = current_q + m_learning_rate * (reward + m_discount_factor * max_next_q - current_q);
+            m_q_values[state][action] = new_q;
+        }
+    }
+
+    void DecayEpsilon(double decay_factor = 0.999) {
+        m_epsilon *= decay_factor;
+        if (m_epsilon < 0.01) m_epsilon = 0.01;
+    }
+    
+    double GetLearningRate() { return m_learning_rate; }
+    void SetLearningRate(double lr) { m_learning_rate = lr; }
+    double GetDiscountFactor() { return m_discount_factor; }
+    double GetEpsilon() { return m_epsilon; }
+    void SetEpsilon(double eps) { m_epsilon = eps; }
+};
+
+//--- Beta-Bernoulli Conjugate Prior
+class BetaBernoulliModel {
+private:
+    double alpha;
+    double beta;
+    double confidence_threshold;
+
+public:
+    BetaBernoulliModel(double initial_alpha = 1.0, double initial_beta = 1.0) {
+        alpha = initial_alpha;
+        beta = initial_beta;
+        confidence_threshold = 0.6;
+    }
+
+    void Update(bool success) {
+        if (success) {
+            alpha += 1.0;
+        } else {
+            beta += 1.0;
+        }
+    }
+
+    double GetExpectedSuccessRate() {
+        return alpha / (alpha + beta);
+    }
+
+    double GetConfidenceInterval(double confidence_level = 0.95) {
+        double mean = GetExpectedSuccessRate();
+        double variance = (alpha * beta) / ((alpha + beta) * (alpha + beta) * (alpha + beta + 1));
+        return mean - 1.96 * MathSqrt(variance);
+    }
+
+    bool IsConfident() {
+        return GetExpectedSuccessRate() >= confidence_threshold;
+    }
+
+    double GetUncertainty() {
+        return 1.0 / (alpha + beta);
+    }
+};
+
+//--- State Encoder
+class StateEncoder {
+private:
+    int market_trend_levels;
+    int momentum_levels;
+    int volatility_levels;
+    int volume_levels;
+    int rsi_levels;
+    int macd_levels;
+
+public:
+    StateEncoder() {
+        market_trend_levels = 3;
+        momentum_levels = 3;
+        volatility_levels = 3;
+        volume_levels = 3;
+        rsi_levels = 3;
+        macd_levels = 3;
+    }
+
+    int EncodeState(int trend, int mom, int vol, int vol_act, int rsi, int macd) {
+        trend = trend + 1;
+        mom = mom + 1;
+        vol = vol + 1;
+        vol_act = vol_act + 1;
+        rsi = rsi + 1;
+        macd = macd + 1;
+
+        int state = trend +
+                   mom * market_trend_levels +
+                   vol * market_trend_levels * momentum_levels +
+                   vol_act * market_trend_levels * momentum_levels * volatility_levels +
+                   rsi * market_trend_levels * momentum_levels * volatility_levels * volume_levels +
+                   macd * market_trend_levels * momentum_levels * volatility_levels * volume_levels * rsi_levels;
+
+        return state % QTABLE_STATES;
+    }
+
+    void DecodeState(int state, int &trend, int &mom, int &vol, int &vol_act, int &rsi, int &macd) {
+        int temp = state;
+        
+        macd = temp % 3; temp /= 3;
+        rsi = temp % 3; temp /= 3;
+        vol_act = temp % 3; temp /= 3;
+        vol = temp % 3; temp /= 3;
+        mom = temp % 3; temp /= 3;
+        trend = temp % 3;
+        
+        trend -= 1;
+        mom -= 1;
+        vol -= 1;
+        vol_act -= 1;
+        rsi -= 1;
+        macd -= 1;
+    }
+};
+
+//--- Specialist Agent Base Class
+class SpecialistAgent {
+protected:
+    string agent_name;
+    int agent_id;
+    double confidence_threshold;
+    bool enabled;
+    BetaBernoulliModel performance_model;
+
+public:
+    SpecialistAgent(string name, int id) {
+        agent_name = name;
+        agent_id = id;
+        confidence_threshold = AGENT_CONFIDENCE_THRESHOLD;
+        enabled = true;
+    }
+
+    virtual ~SpecialistAgent() {}
+
+    virtual int EvaluateSignal(AgentContext &context) = 0;
+    virtual double GetConfidence(AgentContext &context) = 0;
+    virtual bool ShouldBlockTrade(AgentContext &context) = 0;
+
+    void SetEnabled(bool enable) { enabled = enable; }
+    bool IsEnabled() { return enabled; }
+    string GetName() { return agent_name; }
+    int GetId() { return agent_id; }
+
+    void UpdatePerformance(bool success) {
+        performance_model.Update(success);
+    }
+
+    double GetPerformanceConfidence() {
+        return performance_model.GetExpectedSuccessRate();
+    }
+
+    bool IsPerformingWell() {
+        return performance_model.IsConfident();
+    }
+};
+
+//--- Trend Following Agent
+class TrendAgent : public SpecialistAgent {
+public:
+    TrendAgent() : SpecialistAgent("Trend", 0) {}
+
+    int EvaluateSignal(AgentContext &context) override {
+        if (!ENABLE_TREND_AGENT || !enabled) return 0;
+
+        double ma_short = iMA(NULL, 0, 10, 0, MODE_SMA, PRICE_CLOSE, 0);
+        double ma_long = iMA(NULL, 0, 20, 0, MODE_SMA, PRICE_CLOSE, 0);
+
+        if (ma_short > ma_long) return 1;
+        if (ma_short < ma_long) return -1;
+        return 0;
+    }
+
+    double GetConfidence(AgentContext &context) override {
+        return GetPerformanceConfidence();
+    }
+
+    bool ShouldBlockTrade(AgentContext &context) override {
+        return false;
+    }
+};
+
+//--- Momentum Agent
+class MomentumAgent : public SpecialistAgent {
+public:
+    MomentumAgent() : SpecialistAgent("Momentum", 1) {}
+
+    int EvaluateSignal(AgentContext &context) override {
+        if (!ENABLE_MOMENTUM_AGENT || !enabled) return 0;
+
+        double current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        double prev_price = iClose(NULL, 0, 1);
+
+        double momentum = (current_price - prev_price) / prev_price;
+        
+        if (momentum > 0.001) return 1;
+        if (momentum < -0.001) return -1;
+        return 0;
+    }
+
+    double GetConfidence(AgentContext &context) override {
+        return GetPerformanceConfidence();
+    }
+
+    bool ShouldBlockTrade(AgentContext &context) override {
+        return false;
+    }
+};
+
+//--- Mean Reversion Agent
+class MeanReversionAgent : public SpecialistAgent {
+public:
+    MeanReversionAgent() : SpecialistAgent("MeanReversion", 2) {}
+
+    int EvaluateSignal(AgentContext &context) override {
+        if (!ENABLE_MEAN_REVERSION_AGENT || !enabled) return 0;
+
+        double current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        double sma_20 = iMA(NULL, 0, 20, 0, MODE_SMA, PRICE_CLOSE, 0);
+        double std_dev = CalculateStdDev(20);
+
+        double z_score = (current_price - sma_20) / std_dev;
+
+        if (z_score > 2.0) return -1;
+        if (z_score < -2.0) return 1;
+        return 0;
+    }
+
+    double GetConfidence(AgentContext &context) override {
+        return GetPerformanceConfidence();
+    }
+
+    bool ShouldBlockTrade(AgentContext &context) override {
+        return false;
+    }
+
+private:
+    double CalculateStdDev(int periods) {
+        double prices[];
+        ArrayResize(prices, periods);
+        
+        for (int i = 0; i < periods; i++) {
+            prices[i] = iClose(NULL, 0, i);
+        }
+        
+        double sum = 0, sum_sq = 0;
+        for (int i = 0; i < periods; i++) {
+            sum += prices[i];
+            sum_sq += prices[i] * prices[i];
+        }
+        
+        double mean = sum / periods;
+        return MathSqrt((sum_sq / periods) - (mean * mean));
+    }
+};
+
+//--- Volatility Agent
+class VolatilityAgent : public SpecialistAgent {
+public:
+    VolatilityAgent() : SpecialistAgent("Volatility", 3) {}
+
+    int EvaluateSignal(AgentContext &context) override {
+        if (!ENABLE_VOLATILITY_AGENT || !enabled) return 0;
+
+        double atr = iATR(NULL, 0, 14, 0);
+        double avg_atr = CalculateAvgATR(50);
+        
+        if (atr > avg_atr * VOLATILITY_THRESHOLD) return -1;
+        if (atr < avg_atr * 0.5) return 1;
+        return 0;
+    }
+
+    double GetConfidence(AgentContext &context) override {
+        return GetPerformanceConfidence();
+    }
+
+    bool ShouldBlockTrade(AgentContext &context) override {
+        if (!ENABLE_VETO_SYSTEM || !ENABLE_VOLATILITY_AGENT) return false;
+
+        double atr = iATR(NULL, 0, 14, 0);
+        double avg_atr = CalculateAvgATR(50);
+        
+        return (atr > avg_atr * VOLATILITY_THRESHOLD);
+    }
+
+private:
+    double CalculateAvgATR(int periods) {
+        double sum = 0;
+        for (int i = 0; i < periods; i++) {
+            sum += iATR(NULL, 0, 14, i);
+        }
+        return sum / periods;
+    }
+};
+
+//--- Sentiment Agent
+class SentimentAgent : public SpecialistAgent {
+public:
+    SentimentAgent() : SpecialistAgent("Sentiment", 4) {}
+
+    int EvaluateSignal(AgentContext &context) override {
+        if (!ENABLE_SENTIMENT_AGENT || !enabled) return 0;
+
+        double sentiment = CalculateSentimentScore();
+        context.sentiment_score = sentiment;
+
+        if (sentiment > 0.5) return 1;
+        if (sentiment < -0.5) return -1;
+        return 0;
+    }
+
+    double GetConfidence(AgentContext &context) override {
+        return GetPerformanceConfidence();
+    }
+
+    bool ShouldBlockTrade(AgentContext &context) override {
+        if (!ENABLE_VETO_SYSTEM || !ENABLE_SENTIMENT_AGENT) return false;
+
+        double sentiment = CalculateSentimentScore();
+        
+        return (sentiment < SENTIMENT_THRESHOLD);
+    }
+
+private:
+    double CalculateSentimentScore() {
+        double price_change = (iClose(NULL, 0, 0) - iClose(NULL, 0, 1)) / iClose(NULL, 0, 1);
+        double volume_change = (iVolume(NULL, 0, 0) - iVolume(NULL, 0, 1)) / iVolume(NULL, 0, 1);
+        
+        return (price_change * 0.7 + volume_change * 0.3) * 0.5;
+    }
+};
+
+//--- Execution DAG Node Base Class
+class ExecutionNode {
+protected:
+    string node_name;
+    int node_id;
+    bool executed;
+    bool succeeded;
+    string error_message;
+    datetime start_time;
+    datetime end_time;
+
+public:
+    ExecutionNode(string name, int id) {
+        node_name = name;
+        node_id = id;
+        executed = false;
+        succeeded = false;
+        error_message = "";
+    }
+
+    virtual ~ExecutionNode() {}
+
+    virtual bool Execute(AgentContext &context, TradeRecordV8 &trade_record) = 0;
+    virtual bool ValidateInput(AgentContext &context) = 0;
+
+    string GetName() { return node_name; }
+    int GetId() { return node_id; }
+    bool WasExecuted() { return executed; }
+    bool WasSuccessful() { return succeeded; }
+    string GetErrorMessage() { return error_message; }
+    double GetExecutionTime() { 
+        return executed ? (end_time - start_time) / 1000.0 : 0.0; 
+    }
+};
+
+//--- Validation Node
+class ValidationNode : public ExecutionNode {
+public:
+    ValidationNode() : ExecutionNode("Validation", 0) {}
+
+    bool Execute(AgentContext &context, TradeRecordV8 &trade_record) override {
+        start_time = TimeCurrent();
+        executed = true;
+
+        if (!ValidateInput(context)) {
+            succeeded = false;
+            error_message = "Input validation failed";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        if (context.balance <= 0) {
+            succeeded = false;
+            error_message = "Insufficient balance";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        if (context.position_count >= MAX_OPEN_POSITIONS) {
+            succeeded = false;
+            error_message = "Maximum positions reached";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        succeeded = true;
+        end_time = TimeCurrent();
+        return true;
+    }
+
+    bool ValidateInput(AgentContext &context) override {
+        return (context.balance > 0 && 
+                context.margin_level > 0 && 
+                context.last_update != 0);
+    }
+};
+
+//--- Risk Check Node
+class RiskCheckNode : public ExecutionNode {
+public:
+    RiskCheckNode() : ExecutionNode("RiskCheck", 1) {}
+
+    bool Execute(AgentContext &context, TradeRecordV8 &trade_record) override {
+        start_time = TimeCurrent();
+        executed = true;
+
+        if (!ValidateInput(context)) {
+            succeeded = false;
+            error_message = "Input validation failed";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        double position_size = INITIAL_CAPITAL * RISK_PER_TRADE;
+        double max_risk = context.balance * RISK_PER_TRADE;
+
+        if (position_size > max_risk) {
+            succeeded = false;
+            error_message = "Position size exceeds risk limit";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        double required_margin = position_size * SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_REQUIRED);
+        if (context.free_margin < required_margin) {
+            succeeded = false;
+            error_message = "Insufficient free margin";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        succeeded = true;
+        end_time = TimeCurrent();
+        return true;
+    }
+
+    bool ValidateInput(AgentContext &context) override {
+        return (context.balance > 0 && 
+                context.free_margin >= 0 && 
+                context.margin > 0);
+    }
+};
+
+//--- Pre-Flight Node
+class PreFlightNode : public ExecutionNode {
+public:
+    PreFlightNode() : ExecutionNode("PreFlight", 2) {}
+
+    bool Execute(AgentContext &context, TradeRecordV8 &trade_record) override {
+        start_time = TimeCurrent();
+        executed = true;
+
+        if (!ValidateInput(context)) {
+            succeeded = false;
+            error_message = "Input validation failed";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        double spread = SymbolInfoDouble(_Symbol, SYMBOL_SPREAD);
+        if (spread > 50) {
+            succeeded = false;
+            error_message = "Spread too wide: " + DoubleToString(spread);
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        MqlDateTime dt;
+        TimeToStruct(TimeCurrent(), dt);
+
+        succeeded = true;
+        end_time = TimeCurrent();
+        return true;
+    }
+
+    bool ValidateInput(AgentContext &context) override {
+        return (context.volatility >= 0 && 
+                context.sentiment_score >= -1 && 
+                context.sentiment_score <= 1);
+    }
+};
+
+//--- Order Submission Node
+class SubmissionNode : public ExecutionNode {
+public:
+    SubmissionNode() : ExecutionNode("Submission", 3) {}
+
+    bool Execute(AgentContext &context, TradeRecordV8 &trade_record) override {
+        start_time = TimeCurrent();
+        executed = true;
+
+        if (!ValidateInput(context)) {
+            succeeded = false;
+            error_message = "Input validation failed";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        ENUM_ORDER_TYPE order_type = (ENUM_ORDER_TYPE)trade_record.type;
+        double volume = trade_record.volume;
+        double price = trade_record.price_open;
+        double sl = trade_record.sl;
+        double tp = trade_record.tp;
+
+        bool result = false;
+        ulong ticket = 0;
+
+        switch(order_type) {
+            case ORDER_TYPE_BUY:
+                if(m_trade.Buy(volume, _Symbol, price, sl, tp, "GoldHunter_AI_Trade")) {
+                    ticket = m_trade.ResultOrder();
+                    result = true;
+                }
+                break;
+            case ORDER_TYPE_SELL:
+                if(m_trade.Sell(volume, _Symbol, price, sl, tp, "GoldHunter_AI_Trade")) {
+                    ticket = m_trade.ResultOrder();
+                    result = true;
+                }
+                break;
+            default:
+                error_message = "Unsupported order type";
+                end_time = TimeCurrent();
+                return false;
+        }
+
+        if (result && ticket > 0) {
+            trade_record.ticket = (int)ticket;
+            trade_record.time_entry = TimeCurrent();
+        } else {
+            error_message = "Order submission failed: " + (string)GetLastError();
+            result = false;
+        }
+
+        succeeded = result;
+        end_time = TimeCurrent();
+        return result;
+    }
+
+    bool ValidateInput(AgentContext &context) override {
+        return true;
+    }
+};
+
+//--- Confirmation Node
+class ConfirmationNode : public ExecutionNode {
+public:
+    ConfirmationNode() : ExecutionNode("Confirmation", 4) {}
+
+    bool Execute(AgentContext &context, TradeRecordV8 &trade_record) override {
+        start_time = TimeCurrent();
+        executed = true;
+
+        if (!ValidateInput(context)) {
+            succeeded = false;
+            error_message = "Input validation failed";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        if (trade_record.ticket <= 0) {
+            succeeded = false;
+            error_message = "No valid ticket to confirm";
+            end_time = TimeCurrent();
+            return false;
+        }
+
+        if (m_position.SelectByTicket(trade_record.ticket)) {
+            trade_record.time_entry = m_position.Time();
+            trade_record.price_open = m_position.PriceOpen();
+            succeeded = true;
+        } else {
+            succeeded = true;
+        }
+
+        end_time = TimeCurrent();
+        return true;
+    }
+
+    bool ValidateInput(AgentContext &context) override {
+        return true;
+    }
+};
+
+//--- Execution DAG Manager
+class ExecutionDAG {
+private:
+    ExecutionNode* nodes[5];
+    int num_nodes;
+
+public:
+    ExecutionDAG() {
+        num_nodes = 5;
+        nodes[0] = new ValidationNode();
+        nodes[1] = new RiskCheckNode();
+        nodes[2] = new PreFlightNode();
+        nodes[3] = new SubmissionNode();
+        nodes[4] = new ConfirmationNode();
+    }
+
+    ~ExecutionDAG() {
+        for (int i = 0; i < num_nodes; i++) {
+            delete nodes[i];
+        }
+    }
+
+    bool ExecuteAll(AgentContext &context, TradeRecordV8 &trade_record) {
+        for (int i = 0; i < num_nodes; i++) {
+            if (!nodes[i]->Execute(context, trade_record)) {
+                return false;
             }
-         }
-      }
-   }
-   
-   // Auto-apply best parameters
-   if(bestSharpe > optimizer.bestSharpe) {
-      Print(StringFormat("[v7] Optimization found better params: SL=%.2f TP=%.2f Conf=%.1f Sharpe=%.2f",
-                         bestSL, bestTP, bestConf, bestSharpe));
-      
-      // Note: In live EA, we'd use GlobalVariableSet or modify inputs dynamically
-      // For now, log the recommended changes
-      optimizer.bestSharpe = bestSharpe;
-      optimizer.bestATR_SL = bestSL;
-      optimizer.bestATR_TP = bestTP;
-      optimizer.bestMinConf = bestConf;
-      
-      // Send Discord alert about optimization
-      if(NotifyOnRiskEvent) {
-         SendDiscord(StringFormat("🔧 **SELF-HEALING OPTIMIZER**\\n"+
-                                  "New optimal parameters found:\\n"+
-                                  "ATR_SL: `%.2f` → `%.2f`\\n"+
-                                  "ATR_TP: `%.2f` → `%.2f`\\n"+
-                                  "MinConf: `%.1f` → `%.1f`\\n"+
-                                  "Sharpe: `%.2f`",
-                                  ATR_SL_Multiplier, bestSL,
-                                  ATR_TP_Multiplier, bestTP,
-                                  MinConfidence, bestConf,
-                                  bestSharpe));
-      }
-   }
-   
-   optimizer.tradeBatchCount = 0;
-   optimizer.lastOptimize = TimeCurrent();
+        }
+        return true;
+    }
+
+    bool ExecuteWithTimeout(AgentContext &context, TradeRecordV8 &trade_record, int timeout_ms[]) {
+        for (int i = 0; i < num_nodes; i++) {
+            datetime start = TimeCurrent();
+            
+            if (!nodes[i]->Execute(context, trade_record)) {
+                return false;
+            }
+
+            if ((TimeCurrent() - start) > timeout_ms[i]) {
+                nodes[i]->succeeded = false;
+                nodes[i]->error_message = "Node execution timed out";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void GetExecutionStatus(int status[]) {
+        for (int i = 0; i < num_nodes; i++) {
+            status[i] = nodes[i]->WasSuccessful() ? 1 : 0;
+        }
+    }
+
+    double GetTotalExecutionTime() {
+        double total_time = 0;
+        for (int i = 0; i < num_nodes; i++) {
+            total_time += nodes[i]->GetExecutionTime();
+        }
+        return total_time;
+    }
+};
+
+//--- VETO System
+class VetoSystem {
+private:
+    VolatilityAgent* volatility_agent;
+    SentimentAgent* sentiment_agent;
+    datetime last_veto_time;
+    int veto_duration_seconds;
+
+public:
+    VetoSystem() {
+        volatility_agent = new VolatilityAgent();
+        sentiment_agent = new SentimentAgent();
+        last_veto_time = 0;
+        veto_duration_seconds = VETO_DECAY_SECONDS;
+    }
+
+    ~VetoSystem() {
+        delete volatility_agent;
+        delete sentiment_agent;
+    }
+
+    bool CheckForVeto(AgentContext &context) {
+        if (last_veto_time > 0 && (TimeCurrent() - last_veto_time) < veto_duration_seconds) {
+            return true;
+        }
+
+        if (last_veto_time > 0 && (TimeCurrent() - last_veto_time) >= veto_duration_seconds) {
+            last_veto_time = 0;
+        }
+
+        bool volatility_veto = volatility_agent->ShouldBlockTrade(context);
+        bool sentiment_veto = sentiment_agent->ShouldBlockTrade(context);
+
+        if (volatility_veto || sentiment_veto) {
+            last_veto_time = TimeCurrent();
+            return true;
+        }
+
+        return false;
+    }
+
+    void GetVetoReasons(AgentContext &context, string &reasons) {
+        reasons = "";
+        if (volatility_agent->ShouldBlockTrade(context)) {
+            reasons += "High Volatility; ";
+        }
+        if (sentiment_agent->ShouldBlockTrade(context)) {
+            reasons += "Negative Sentiment; ";
+        }
+    }
+
+    bool IsVetoActive() {
+        return (last_veto_time > 0 && (TimeCurrent() - last_veto_time) < veto_duration_seconds);
+    }
+};
+
+//--- Main Expert Advisor Class
+class GoldHunterUHFAgent : public CExpert {
+private:
+    AgentContext m_context;
+    WorkingMemory* m_working_memory;
+    EpisodicMemory* m_episodic_memory;
+    QTable* m_q_table;
+    StateEncoder* m_state_encoder;
+    SpecialistAgent* m_agents[5];
+    ExecutionDAG* m_execution_dag;
+    VetoSystem* m_veto_system;
+    PipelineTrace m_pipeline_trace;
+    int m_current_state;
+    int m_previous_state;
+    double m_previous_reward;
+
+public:
+    GoldHunterUHFAgent() {
+        m_working_memory = new WorkingMemory(WORKING_MEMORY_SIZE);
+        m_episodic_memory = new EpisodicMemory(EPISODIC_MEMORY_FILE, EPISODIC_MEMORY_RETENTION);
+        m_q_table = new QTable(QTABLE_STATES);
+        m_state_encoder = new StateEncoder();
+        
+        m_agents[0] = new TrendAgent();
+        m_agents[1] = new MomentumAgent();
+        m_agents[2] = new MeanReversionAgent();
+        m_agents[3] = new VolatilityAgent();
+        m_agents[4] = new SentimentAgent();
+        
+        m_execution_dag = new ExecutionDAG();
+        m_veto_system = new VetoSystem();
+        
+        m_current_state = 0;
+        m_previous_state = 0;
+        m_previous_reward = 0.0;
+    }
+
+    ~GoldHunterUHFAgent() {
+        delete m_working_memory;
+        delete m_episodic_memory;
+        delete m_q_table;
+        delete m_state_encoder;
+        
+        for (int i = 0; i < 5; i++) {
+            delete m_agents[i];
+        }
+        
+        delete m_execution_dag;
+        delete m_veto_system;
+    }
+
+    bool Init() {
+        if (!m_trade.SetExpertMagicNumber(123456)) {
+            Print("Failed to set magic number");
+            return false;
+        }
+        
+        if (!m_trade.SetTypeFilling(ORDER_FILLING_FOK)) {
+            Print("Failed to set filling type");
+            return false;
+        }
+        
+        if (!m_trade.SetTypeTime(ORDER_TIME_GTC)) {
+            Print("Failed to set order time type");
+            return false;
+        }
+        
+        UpdateContext();
+        
+        Print("GoldHunter UHF AGI v8 Phase 3 initialized successfully");
+        return true;
+    }
+
+    void OnTick() {
+        UpdateContext();
+        Observe();
+        Orient();
+        int action = Decide();
+        Act(action);
+        UpdateLearning();
+    }
+
+    void Observe() {
+        for (int i = 0; i < 100; i++) {
+            m_market_data[i] = iClose(NULL, 0, i);
+        }
+        
+        CalculateIndicators();
+        
+        int trend = GetMarketTrend();
+        int momentum = GetMomentumSignal();
+        int volatility = GetVolatilityLevel();
+        int volume = GetVolumeLevel();
+        int rsi = GetRSISignal();
+        int macd = GetMACDSignal();
+        
+        m_current_state = m_state_encoder->EncodeState(trend, momentum, volatility, volume, rsi, macd);
+    }
+
+    void Orient() {
+        int agent_signals[5];
+        double agent_confidences[5];
+        
+        for (int i = 0; i < 5; i++) {
+            if (m_agents[i]->IsEnabled()) {
+                agent_signals[i] = m_agents[i]->EvaluateSignal(m_context);
+                agent_confidences[i] = m_agents[i]->GetConfidence(m_context);
+            } else {
+                agent_signals[i] = 0;
+                agent_confidences[i] = 0.0;
+            }
+        }
+        
+        bool veto_active = m_veto_system->IsVetoActive();
+        if (veto_active) {
+            string veto_reasons;
+            m_veto_system->GetVetoReasons(m_context, veto_reasons);
+            Print("VETO ACTIVE: ", veto_reasons);
+        }
+    }
+
+    int Decide() {
+        if (m_veto_system->CheckForVeto(m_context)) {
+            return 2;
+        }
+        
+        int action = m_q_table->SelectAction(m_current_state);
+        
+        if (!PassesSafetyChecks(action)) {
+            return 2;
+        }
+        
+        return action;
+    }
+
+    void Act(int action) {
+        if (action == 0) {
+            ExecuteBuy();
+        } else if (action == 1) {
+            ExecuteSell();
+        }
+    }
+
+    void ExecuteBuy() {
+        if (m_context.position_count >= MAX_OPEN_POSITIONS) {
+            Print("Maximum positions reached, cannot execute buy");
+            return;
+        }
+
+        if (m_context.free_margin < (m_context.balance * RISK_PER_TRADE)) {
+            Print("Insufficient margin for buy order");
+            return;
+        }
+
+        TradeRecordV8 trade_record = CreateTradeRecord(ORDER_TYPE_BUY);
+        
+        int timeouts[] = {VALIDATION_TIMEOUT, RISK_CHECK_TIMEOUT, PRE_FLIGHT_TIMEOUT, 
+                         SUBMISSION_TIMEOUT, CONFIRMATION_TIMEOUT};
+        
+        bool success = m_execution_dag->ExecuteWithTimeout(m_context, trade_record, timeouts);
+        
+        if (success) {
+            Print("Buy order executed successfully, ticket: ", trade_record.ticket);
+            
+            m_working_memory->Add(trade_record);
+            m_episodic_memory->SaveRecord(trade_record);
+        } else {
+            Print("Buy order execution failed");
+            
+            trade_record.veto_triggered = m_veto_system->CheckForVeto(m_context);
+            m_episodic_memory->SaveRecord(trade_record);
+        }
+    }
+
+    void ExecuteSell() {
+        if (m_context.position_count >= MAX_OPEN_POSITIONS) {
+            Print("Maximum positions reached, cannot execute sell");
+            return;
+        }
+
+        if (m_context.free_margin < (m_context.balance * RISK_PER_TRADE)) {
+            Print("Insufficient margin for sell order");
+            return;
+        }
+
+        TradeRecordV8 trade_record = CreateTradeRecord(ORDER_TYPE_SELL);
+        
+        int timeouts[] = {VALIDATION_TIMEOUT, RISK_CHECK_TIMEOUT, PRE_FLIGHT_TIMEOUT, 
+                         SUBMISSION_TIMEOUT, CONFIRMATION_TIMEOUT};
+        
+        bool success = m_execution_dag->ExecuteWithTimeout(m_context, trade_record, timeouts);
+        
+        if (success) {
+            Print("Sell order executed successfully, ticket: ", trade_record.ticket);
+            
+            m_working_memory->Add(trade_record);
+            m_episodic_memory->SaveRecord(trade_record);
+        } else {
+            Print("Sell order execution failed");
+            
+            trade_record.veto_triggered = m_veto_system->CheckForVeto(m_context);
+            m_episodic_memory->SaveRecord(trade_record);
+        }
+    }
+
+    TradeRecordV8 CreateTradeRecord(ENUM_ORDER_TYPE order_type) {
+        TradeRecordV8 record;
+        
+        record.timestamp = TimeCurrent();
+        record.symbol = _Symbol;
+        record.type = order_type;
+        record.volume = m_context.balance * RISK_PER_TRADE / 100000;
+        record.price_open = (order_type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        record.sl = CalculateStopLoss(order_type);
+        record.tp = CalculateTakeProfit(order_type);
+        record.profit = 0.0;
+        record.ticket = 0;
+        record.magic_number = 123456;
+        record.comment = "GoldHunter_AI_Trade_v8";
+        
+        record.time_setup = TimeCurrent();
+        record.time_entry = 0;
+        record.time_exit = 0;
+        
+        record.agent_id = 0;
+        record.confidence = 0.0;
+        record.strategy_used = GetStrategyName(order_type);
+        
+        for (int i = 0; i < 5; i++) {
+            if (m_agents[i]->IsEnabled()) {
+                record.specialist_agent_contributions[i] = m_agents[i]->GetName();
+                record.agent_confidences[i] = m_agents[i]->GetConfidence(m_context);
+                record.agent_recommendations[i] = (m_agents[i]->EvaluateSignal(m_context) > 0) ? "BUY" : 
+                                                (m_agents[i]->EvaluateSignal(m_context) < 0) ? "SELL" : "HOLD";
+                record.agent_approvals[i] = true;
+            }
+        }
+        
+        record.veto_triggered = m_veto_system->CheckForVeto(m_context);
+        if (record.veto_triggered) {
+            string veto_reasons;
+            m_veto_system->GetVetoReasons(m_context, veto_reasons);
+            record.veto_reason = veto_reasons;
+        }
+        
+        int node_status[5];
+        m_execution_dag->GetExecutionStatus(node_status);
+        for (int i = 0; i < 5; i++) {
+            record.execution_node_status[i] = node_status[i];
+        }
+        
+        record.dag_execution_time = m_execution_dag->GetTotalExecutionTime();
+        
+        record.state_before = m_previous_state;
+        record.state_after = m_current_state;
+        record.q_value_before = m_q_table->GetQValue(m_previous_state, 0);
+        record.q_value_after = m_q_table->GetQValue(m_current_state, 0);
+        record.exploration_used = false;
+        record.learning_rate_applied = LEARNING_RATE;
+        
+        record.risk_adjusted_return = 0.0;
+        record.sharpe_ratio = 0.0;
+        record.max_drawdown = 0.0;
+        
+        record.context_snapshot = "Balance:" + DoubleToString(m_context.balance) + 
+                                 ";Equity:" + DoubleToString(m_context.equity) + 
+                                 ";Margin:" + DoubleToString(m_context.margin);
+        
+        record.market_condition = GetMarketRegime();
+        record.volatility_measure = m_context.volatility;
+        
+        return record;
+    }
+
+    double CalculateStopLoss(ENUM_ORDER_TYPE order_type) {
+        double current_price = (order_type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        double pip_size = SymbolInfoDouble(_Symbol, SYMBOL_POINT) * 10;
+        
+        if (order_type == ORDER_TYPE_BUY) {
+            return current_price - (STOP_LOSS_PIPS * pip_size);
+        } else {
+            return current_price + (STOP_LOSS_PIPS * pip_size);
+        }
+    }
+
+    double CalculateTakeProfit(ENUM_ORDER_TYPE order_type) {
+        double current_price = (order_type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        double pip_size = SymbolInfoDouble(_Symbol, SYMBOL_POINT) * 10;
+        
+        if (order_type == ORDER_TYPE_BUY) {
+            return current_price + (TAKE_PROFIT_PIPS * pip_size);
+        } else {
+            return current_price - (TAKE_PROFIT_PIPS * pip_size);
+        }
+    }
+
+    string GetStrategyName(ENUM_ORDER_TYPE order_type) {
+        int trend = GetMarketTrend();
+        int momentum = GetMomentumSignal();
+        
+        if (trend == 1 && momentum == 1) return "Trend_Following_Bullish";
+        if (trend == -1 && momentum == -1) return "Trend_Following_Bearish";
+        if (MathAbs(trend) == 0 && momentum != 0) return "Momentum_Based";
+        if (MathAbs(trend) == 0 && momentum == 0) return "Mean_Reversion";
+        
+        return "Mixed_Strategy";
+    }
+
+    string GetMarketRegime() {
+        int trend = GetMarketTrend();
+        double volatility = m_context.volatility;
+        
+        if (trend == 1 && volatility < 1.0) return "Bullish_Low_Volatility";
+        if (trend == 1 && volatility >= 1.0) return "Bullish_High_Volatility";
+        if (trend == -1 && volatility < 1.0) return "Bearish_Low_Volatility";
+        if (trend == -1 && volatility >= 1.0) return "Bearish_High_Volatility";
+        if (trend == 0) return "Sideways";
+        
+        return "Undefined";
+    }
+
+    void UpdateContext() {
+        m_context.balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        m_context.equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        m_context.margin = AccountInfoDouble(ACCOUNT_MARGIN);
+        m_context.free_margin = AccountInfoDouble(ACCOUNT_FREEMARGIN);
+        m_context.margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+        
+        int pos_count = 0;
+        for (int i = 0; i < PositionsTotal(); i++) {
+            if (PositionSelectByIndex(i) && PositionGetInteger(POSITION_MAGIC) == 123456) {
+                pos_count++;
+            }
+        }
+        m_context.position_count = pos_count;
+        
+        m_context.total_profit = AccountInfoDouble(ACCOUNT_PROFIT);
+        m_context.last_update = TimeCurrent();
+        
+        m_context.volatility = CalculateVolatility(20);
+        m_context.momentum = CalculateMomentum(10);
+        m_context.trend_direction = GetMarketTrend();
+        m_context.sentiment_score = CalculateSentiment();
+        m_context.mean_deviation = CalculateMeanDeviation(20);
+    }
+
+    double CalculateVolatility(int periods) {
+        double prices[];
+        ArrayResize(prices, periods);
+        
+        for (int i = 0; i < periods; i++) {
+            prices[i] = iClose(NULL, 0, i);
+        }
+        
+        double sum = 0, sum_sq = 0;
+        for (int i = 0; i < periods; i++) {
+            sum += prices[i];
+            sum_sq += prices[i] * prices[i];
+        }
+        
+        double mean = sum / periods;
+        return MathSqrt((sum_sq / periods) - (mean * mean));
+    }
+
+    double CalculateMomentum(int periods) {
+        double current_price = iClose(NULL, 0, 0);
+        double past_price = iClose(NULL, 0, periods);
+        
+        if (past_price == 0) return 0;
+        
+        return ((current_price - past_price) / past_price) * 100;
+    }
+
+    double CalculateMeanDeviation(int periods) {
+        double sma = iMA(NULL, 0, periods, 0, MODE_SMA, PRICE_CLOSE, 0);
+        double sum_abs_diff = 0;
+        
+        for (int i = 0; i < periods; i++) {
+            double price = iClose(NULL, 0, i);
+            sum_abs_diff += MathAbs(price - sma);
+        }
+        
+        return sum_abs_diff / periods;
+    }
+
+    double CalculateSentiment() {
+        double price_change = (iClose(NULL, 0, 0) - iClose(NULL, 0, 1)) / iClose(NULL, 0, 1);
+        double volume_change = (iVolume(NULL, 0, 0) - iVolume(NULL, 0, 1)) / iVolume(NULL, 0, 1);
+        
+        return (price_change * 0.7 + volume_change * 0.3) * 0.5;
+    }
+
+    int GetMarketTrend() {
+        double ma_short = iMA(NULL, 0, 10, 0, MODE_SMA, PRICE_CLOSE, 0);
+        double ma_long = iMA(NULL, 0, 20, 0, MODE_SMA, PRICE_CLOSE, 0);
+        
+        if (ma_short > ma_long * 1.0001) return 1;
+        if (ma_short < ma_long * 0.9999) return -1;
+        return 0;
+    }
+
+    int GetMomentumSignal() {
+        double mom = CalculateMomentum(10);
+        if (mom > 1.0) return 1;
+        if (mom < -1.0) return -1;
+        return 0;
+    }
+
+    int GetVolatilityLevel() {
+        double vol = CalculateVolatility(20);
+        double avg_vol = CalculateAvgVolatility(50);
+        
+        if (vol > avg_vol * 1.5) return 1;
+        if (vol < avg_vol * 0.5) return -1;
+        return 0;
+    }
+
+    int GetVolumeLevel() {
+        double current_vol = iVolume(NULL, 0, 0);
+        double avg_vol = CalculateAvgVolume(20);
+        
+        if (current_vol > avg_vol * 1.5) return 1;
+        if (current_vol < avg_vol * 0.5) return -1;
+        return 0;
+    }
+
+    int GetRSISignal() {
+        double rsi = iRSI(NULL, 0, 14, PRICE_CLOSE, 0);
+        if (rsi > 70) return 1;
+        if (rsi < 30) return -1;
+        return 0;
+    }
+
+    int GetMACDSignal() {
+        double macd_main = iMACD(NULL, 0, 12, 26, 9, PRICE_CLOSE, MODE_MAIN, 0);
+        double macd_signal = iMACD(NULL, 0, 12, 26, 9, PRICE_CLOSE, MODE_SIGNAL, 0);
+        
+        if (macd_main > macd_signal) return 1;
+        if (macd_main < macd_signal) return -1;
+        return 0;
+    }
+
+    double CalculateAvgVolatility(int periods) {
+        double sum = 0;
+        for (int i = 0; i < periods; i++) {
+            sum += CalculateVolatility(20);
+        }
+        return sum / periods;
+    }
+
+    double CalculateAvgVolume(int periods) {
+        double sum = 0;
+        for (int i = 0; i < periods; i++) {
+            sum += iVolume(NULL, 0, i);
+        }
+        return sum / periods;
+    }
+
+    void CalculateIndicators() {
+        for (int i = 0; i < 100; i++) {
+            m_indicators[i] = iClose(NULL, 0, i);
+        }
+    }
+
+    void UpdateLearning() {
+        double reward = CalculateReward();
+        
+        if (m_previous_state != 0) {
+            m_q_table->UpdateQValue(m_previous_state, 0, reward, m_current_state);
+        }
+        
+        m_previous_state = m_current_state;
+        m_previous_reward = reward;
+        
+        m_q_table->DecayEpsilon();
+    }
+
+    double CalculateReward() {
+        static double previous_equity = 0;
+        
+        if (previous_equity == 0) {
+            previous_equity = m_context.equity;
+            return 0.0;
+        }
+        
+        double equity_change = m_context.equity - previous_equity;
+        previous_equity = m_context.equity;
+        
+        return equity_change / m_context.balance;
+    }
+
+    bool PassesSafetyChecks(int action) {
+        if (m_context.margin_level < 100) return false;
+        if (m_context.balance < 100) return false;
+        
+        return true;
+    }
+
+    void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result) {
+        if (trans.order > 0 && trans.magic == 123456) {
+            Print("Trade transaction: ", trans.order, " Type: ", trans.type);
+        }
+    }
+
+    void OnTimer() {
+        UpdateContext();
+    }
+
+    void OnDeinit(const int reason) {
+        Print("GoldHunter UHF AGI v8 Phase 3 deinitialized");
+    }
+};
+
+//--- Global instance
+GoldHunterUHFAgent g_expert;
+
+//--- Expert initialization function
+int OnInit() {
+    if (!g_expert.Init()) {
+        Print("Failed to initialize GoldHunter UHF AGI v8 Phase 3");
+        return INIT_FAILED;
+    }
+    return INIT_SUCCEEDED;
 }
 
-//==========================================================================
-//  DynamicKelly_CalculateLotSize — Kelly Criterion with safety caps
-//==========================================================================
-double DynamicKelly_CalculateLotSize(double slDistance)
-{
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   
-   // Calculate rolling win rate and avg win/loss from last 50 trades
-   int lookback = MathMin(50, tradeHistoryCount);
-   if(lookback < 10) return CalculateLotSize(slDistance);  // Not enough data
-   
-   int wins = 0;
-   double avgWin = 0, avgLoss = 0;
-   int winCount_k = 0, lossCount_k = 0;
-   
-   for(int i = tradeHistoryCount - lookback; i < tradeHistoryCount; i++) {
-      if(tradeHistory[i].profit > 0) {
-         wins++;
-         avgWin += tradeHistory[i].profit;
-         winCount_k++;
-      } else if(tradeHistory[i].profit < 0) {
-         avgLoss += MathAbs(tradeHistory[i].profit);
-         lossCount_k++;
-      }
-   }
-   
-   if(winCount_k > 0) avgWin /= winCount_k;
-   if(lossCount_k > 0) avgLoss /= lossCount_k;
-   
-   double winRate = (lookback > 0) ? (double)wins / lookback : 0.5;
-   double winLossRatio = (avgLoss > 0) ? avgWin / avgLoss : 1.0;
-   
-   // Kelly formula: f* = W - (1-W)/R
-   // Where W = win probability, R = win/loss ratio
-   double kellyFraction = winRate - (1.0 - winRate) / winLossRatio;
-   
-   // Apply half-Kelly safety cap
-   kellyFraction = kellyFraction / 2.0;
-   
-   // Ensure non-negative
-   kellyFraction = MathMax(0.01, kellyFraction);
-   
-   // Cap at reasonable maximum
-   kellyFraction = MathMin(kellyFraction, 0.05);  // Max 5% risk per trade
-   
-   // Drawdown scaling: reduce to 25% when max DD > 5%
-   double ddPct = (peakEquity > 0) ? (peakEquity - equity) / peakEquity * 100.0 : 0;
-   if(ddPct > 5.0) kellyFraction *= 0.25;
-   else if(ddPct > 3.0) kellyFraction *= 0.50;
-   
-   // Calculate lot size from Kelly fraction
-   double riskAmount = balance * kellyFraction;
-   double tickVal = symbolInfo.TickValue();
-   double tickSize = symbolInfo.TickSize();
-   
-   if(slDistance <= 0 || tickVal <= 0 || tickSize <= 0) return MinLot;
-   
-   double slTicks = slDistance / tickSize;
-   double lotSize = riskAmount / (slTicks * tickVal);
-   double lotStep = symbolInfo.LotsStep();
-   
-   lotSize = MathFloor(lotSize / lotStep) * lotStep;
-   lotSize = MathMax(MinLot, MathMin(MaxLot, lotSize));
-   
-   return NormalizeDouble(lotSize, 2);
+//--- Expert deinitialization function
+void OnDeinit(const int reason) {
+    g_expert.OnDeinit(reason);
 }
 
-//==========================================================================
-//  PHASE 2: MEMORY SYSTEM FUNCTIONS
-//==========================================================================
-
-//+------------------------------------------------------------------+
-//| Load Episodic Memory from CSV (Phase 2)                          |
-//+------------------------------------------------------------------+
-void LoadEpisodicMemory()
-{
-   int handle = FileOpen(TradeLogCSV, FILE_CSV | FILE_READ | FILE_ANSI, ";");
-   if(handle == INVALID_HANDLE) {
-      Print("Phase 2: No existing trade log found. Starting fresh memory.");
-      return;
-   }
-   
-   ArrayResize(episodic_memory, 0);
-   int records_loaded = 0;
-   
-   // Skip header line
-   string line = FileReadString(handle);
-   
-   while(!FileIsEnding(handle)) {
-      line = FileReadString(handle);
-      if(StringLen(line) < 10) continue;
-      
-      // Parse CSV line (simplified - in production use StringSplit)
-      TradeRecordV8 record;
-      // ... parsing logic would go here
-      
-      ArrayResize(episodic_memory, ArraySize(episodic_memory) + 1);
-      episodic_memory[ArraySize(episodic_memory)-1] = record;
-      records_loaded++;
-      
-      // Limit to last 1000 trades for memory efficiency
-      if(records_loaded >= 1000) break;
-   }
-   
-   FileClose(handle);
-   Print("Phase 2: Loaded ", records_loaded, " trades from ", TradeLogCSV);
+//--- Expert tick function
+void OnTick() {
+    g_expert.OnTick();
 }
 
-//+------------------------------------------------------------------+
-//| Save Episodic Memory to CSV (Phase 2)                            |
-//+------------------------------------------------------------------+
-void SaveEpisodicMemory()
-{
-   int handle = FileOpen(TradeLogCSV, FILE_CSV | FILE_WRITE | FILE_ANSI, ";");
-   if(handle == INVALID_HANDLE) {
-      Print("Phase 2: ERROR - Cannot open ", TradeLogCSV, " for writing");
-      return;
-   }
-   
-   // Write header
-   FileWrite(handle, "open_time;ticket;type;volume;open_price;sl;tp;close_price;close_time;profit;commission;swap;state_id;prior_prob;posterior_prob;agent_votes;dag_trace;veto_reason");
-   
-   // Write all records
-   for(int i=0; i<ArraySize(episodic_memory); i++) {
-      FileWrite(handle,
-         TimeToString(episodic_memory[i].open_time),
-         episodic_memory[i].ticket,
-         EnumToString(episodic_memory[i].type),
-         episodic_memory[i].volume,
-         episodic_memory[i].open_price,
-         episodic_memory[i].sl,
-         episodic_memory[i].tp,
-         episodic_memory[i].close_price,
-         TimeToString(episodic_memory[i].close_time),
-         episodic_memory[i].profit,
-         episodic_memory[i].commission,
-         episodic_memory[i].swap,
-         episodic_memory[i].state_id,
-         episodic_memory[i].prior_prob,
-         episodic_memory[i].posterior_prob,
-         episodic_memory[i].agent_votes,
-         episodic_memory[i].dag_trace,
-         episodic_memory[i].veto_reason
-      );
-   }
-   
-   FileClose(handle);
+//--- Trade transaction event
+void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result) {
+    g_expert.OnTradeTransaction(trans, request, result);
 }
 
-//+------------------------------------------------------------------+
-//| Update Bayesian Priors (Beta-Bernoulli) - Phase 2                |
-//+------------------------------------------------------------------+
-void UpdateBayesianPrior(int strategy_index, bool success)
-{
-   if(strategy_index < 0 || strategy_index >= 5) return;
-   
-   if(success) {
-      strategy_alpha[strategy_index] += 1.0;
-   } else {
-      strategy_beta[strategy_index] += 1.0;
-   }
+//--- Timer event
+void OnTimer() {
+    g_expert.OnTimer();
 }
 
-//+------------------------------------------------------------------+
-//| Calculate Posterior Mean (Phase 2)                               |
-//+------------------------------------------------------------------+
-double CalculatePosteriorMean(int strategy_index)
-{
-   if(strategy_index < 0 || strategy_index >= 5) return 0.5;
-   
-   double alpha = strategy_alpha[strategy_index];
-   double beta = strategy_beta[strategy_index];
-   
-   return alpha / (alpha + beta);
-}
-
-//+------------------------------------------------------------------+
-//| Encode State for Q-Table (Phase 2)                               |
-//+------------------------------------------------------------------+
-int EncodeMarketState(double rsi, double adx, int regime, datetime time, bool trend_up)
-{
-   // Discretize continuous variables
-   int rsi_bin = (int)(rsi / 25.0);    // 0-3 (4 bins)
-   int adx_bin = (int)(adx / 33.0);    // 0-2 (3 bins)
-   
-   // Session encoding (Phase 2)
-   MqlDateTime dt;
-   TimeToStruct(time, dt);
-   int session_bin = 0;
-   if(dt.hour >= 0 && dt.hour < 8) session_bin = 0;      // Asia
-   else if(dt.hour >= 8 && dt.hour < 16) session_bin = 1; // London
-   else session_bin = 2;                                  // NY
-   
-   // Mixed-radix encoding: state = regime*144 + rsi*36 + adx*12 + session*4 + trend
-   int trend_bin = trend_up ? 1 : 0;
-   int state = regime * 144 + rsi_bin * 36 + adx_bin * 12 + session_bin * 4 + trend_bin;
-   
-   return MathMin(state, Q_TABLE_STATES - 1);
-}
-
-//+------------------------------------------------------------------+
-//| Update Working Memory Ring Buffer (Phase 2)                      |
-//+------------------------------------------------------------------+
-void UpdateWorkingMemory(int regime, double confidence)
-{
-   working_memory.recent_regimes[working_memory.head_index] = (double)regime;
-   working_memory.recent_confidence[working_memory.head_index] = confidence;
-   
-   working_memory.head_index++;
-   if(working_memory.head_index >= 10) working_memory.head_index = 0;
-}
-
-//+------------------------------------------------------------------+
-//| Log Trade to Episodic Memory (Phase 2 + Phase 3 DAG trace)       |
-//+------------------------------------------------------------------+
-void LogTradeToEpisodicMemory(long ticket, ENUM_ORDER_TYPE type, double volume, 
-                               double open_price, double sl, double tp,
-                               int state_id, double prior, double posterior,
-                               string votes, string dag_trace, string veto_reason)
-{
-   ArrayResize(episodic_memory, ArraySize(episodic_memory) + 1);
-   int idx = ArraySize(episodic_memory) - 1;
-   
-   episodic_memory[idx].open_time = TimeCurrent();
-   episodic_memory[idx].ticket = ticket;
-   episodic_memory[idx].type = type;
-   episodic_memory[idx].volume = volume;
-   episodic_memory[idx].open_price = open_price;
-   episodic_memory[idx].sl = sl;
-   episodic_memory[idx].tp = tp;
-   episodic_memory[idx].close_price = 0.0;
-   episodic_memory[idx].close_time = 0;
-   episodic_memory[idx].profit = 0.0;
-   episodic_memory[idx].commission = 0.0;
-   episodic_memory[idx].swap = 0.0;
-   episodic_memory[idx].state_id = state_id;
-   episodic_memory[idx].prior_prob = prior;
-   episodic_memory[idx].posterior_prob = posterior;
-   episodic_memory[idx].agent_votes = votes;
-   episodic_memory[idx].dag_trace = dag_trace;
-   episodic_memory[idx].veto_reason = veto_reason;
-   
-   // Keep memory bounded
-   if(ArraySize(episodic_memory) > 1000) {
-      ArrayCopy(episodic_memory, episodic_memory, 0, 1, 999);
-      ArrayResize(episodic_memory, 999);
-   }
-}
-
-//==========================================================================
-//  PHASE 3: SPECIALIST AGENT & DAG EXECUTION FUNCTIONS
-//==========================================================================
-
-//+------------------------------------------------------------------+
-//| Run 5 Specialist Agents with VETO System (Phase 3)               |
-//+------------------------------------------------------------------+
-void RunSpecialistAgents(AgentContext &ctx)
-{
-   if(!EnableSpecialistAgents) return;
-   
-   int buy_votes = 0;
-   int sell_votes = 0;
-   bool veto_active = false;
-   
-   // Reset all agents
-   for(int i=0; i<5; i++) {
-      specialist_agents[i].signal = 0;
-      specialist_agents[i].veto = false;
-      specialist_agents[i].reasoning = "";
-   }
-   
-   // === AGENT 1: TREND AGENT ===
-   specialist_agents[0].agent_name = "TrendAgent";
-   if(ctx.adxValue > ADX_MinStrength) {
-      if(ctx.emaFast > ctx.emaSlow) {
-         specialist_agents[0].signal = 1;  // Buy
-         specialist_agents[0].confidence = 0.75;
-         specialist_agents[0].reasoning = "EMA bullish crossover + ADX strong";
-      } else {
-         specialist_agents[0].signal = -1; // Sell
-         specialist_agents[0].confidence = 0.75;
-         specialist_agents[0].reasoning = "EMA bearish crossover + ADX strong";
-      }
-   } else {
-      specialist_agents[0].signal = 0;
-      specialist_agents[0].confidence = 0.3;
-      specialist_agents[0].reasoning = "ADX weak - no clear trend";
-   }
-   
-   // === AGENT 2: MOMENTUM AGENT ===
-   specialist_agents[1].agent_name = "MomentumAgent";
-   double momentum = ctx.rsiValue - 50.0;
-   if(MathAbs(momentum) > 10) {
-      specialist_agents[1].signal = (momentum > 0) ? 1 : -1;
-      specialist_agents[1].confidence = 0.65;
-      specialist_agents[1].reasoning = "RSI momentum: " + DoubleToString(momentum, 2);
-   } else {
-      specialist_agents[1].signal = 0;
-      specialist_agents[1].confidence = 0.2;
-      specialist_agents[1].reasoning = "RSI neutral";
-   }
-   
-   // === AGENT 3: MEAN REVERSION AGENT ===
-   specialist_agents[2].agent_name = "MeanReversionAgent";
-   if(ctx.rsiValue > RSI_OB) {
-      specialist_agents[2].signal = -1; // Sell (overbought)
-      specialist_agents[2].confidence = 0.7;
-      specialist_agents[2].reasoning = "RSI overbought > " + DoubleToString(RSI_OB, 1);
-   } else if(ctx.rsiValue < RSI_OS) {
-      specialist_agents[2].signal = 1;  // Buy (oversold)
-      specialist_agents[2].confidence = 0.7;
-      specialist_agents[2].reasoning = "RSI oversold < " + DoubleToString(RSI_OS, 1);
-   } else {
-      specialist_agents[2].signal = 0;
-      specialist_agents[2].confidence = 0.2;
-      specialist_agents[2].reasoning = "RSI in neutral zone";
-   }
-   
-   // === AGENT 4: VOLATILITY AGENT (VETO SPECIALIST) ===
-   specialist_agents[3].agent_name = "VolatilityAgent";
-   double spread_pips = (ctx.askPrice - ctx.bidPrice) / symbolInfo.Point();
-   if(spread_pips > MaxSpreadPips) {
-      specialist_agents[3].veto = true;
-      specialist_agents[3].signal = 0;
-      specialist_agents[3].confidence = 1.0;
-      specialist_agents[3].reasoning = "SPREAD TOO HIGH: " + DoubleToString(spread_pips, 1) + " > " + IntegerToString(MaxSpreadPips);
-      veto_active = true;
-      last_veto_reason = specialist_agents[3].reasoning;
-   } else {
-      specialist_agents[3].veto = false;
-      specialist_agents[3].reasoning = "Spread OK: " + DoubleToString(spread_pips, 1);
-   }
-   
-   // === AGENT 5: SENTIMENT AGENT (VETO SPECIALIST) ===
-   specialist_agents[4].agent_name = "SentimentAgent";
-   // Simplified news filter - check if current hour is high-impact news time
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   // Major news typically at 8:30, 10:00, 14:00 EST (simplified check)
-   if(dt.hour == 13 || dt.hour == 15 || dt.hour == 19) {  // Approximate news hours
-      specialist_agents[4].veto = true;
-      specialist_agents[4].signal = 0;
-      specialist_agents[4].confidence = 1.0;
-      specialist_agents[4].reasoning = "HIGH IMPACT NEWS WINDOW (hour=" + IntegerToString(dt.hour) + ")";
-      veto_active = true;
-      last_veto_reason = specialist_agents[4].reasoning;
-   } else {
-      specialist_agents[4].veto = false;
-      specialist_agents[4].reasoning = "No major news window";
-   }
-   
-   // === TALLY VOTES (if no veto) ===
-   if(!veto_active || !EnableVetoSystem) {
-      for(int i=0; i<3; i++) {  // Only strategic agents (0,1,2)
-         if(specialist_agents[i].signal == 1) buy_votes++;
-         if(specialist_agents[i].signal == -1) sell_votes++;
-      }
-   }
-   
-   // Set final decision in context
-   if(veto_active && EnableVetoSystem) {
-      ctx.tradingAllowed = false;
-      ctx.blockReason = "VETO: " + last_veto_reason;
-      ctx.agentBuyVotes = 0;
-      ctx.agentSellVotes = 0;
-   } else {
-      ctx.agentBuyVotes = buy_votes;
-      ctx.agentSellVotes = sell_votes;
-      
-      if(buy_votes >= ConsensusThreshold) {
-         ctx.proposedType = ORDER_TYPE_BUY;
-         ctx.tradingAllowed = true;
-      } else if(sell_votes >= ConsensusThreshold) {
-         ctx.proposedType = ORDER_TYPE_SELL;
-         ctx.tradingAllowed = true;
-      } else {
-         ctx.tradingAllowed = false;
-         ctx.blockReason = "Insufficient consensus (Buy:" + IntegerToString(buy_votes) + " Sell:" + IntegerToString(sell_votes) + ")";
-      }
-   }
-   
-   // Update working memory with agent confidence
-   double avg_confidence = 0.0;
-   for(int i=0; i<5; i++) avg_confidence += specialist_agents[i].confidence;
-   avg_confidence /= 5.0;
-   UpdateWorkingMemory(ctx.marketRegime, avg_confidence);
-}
-
-//+------------------------------------------------------------------+
-//| Execute 5-Node Order Execution DAG (Phase 3)                     |
-//+------------------------------------------------------------------+
-bool ExecuteOrderDAG(ENUM_ORDER_TYPE type, double lots, double price, double sl, double tp, string comment)
-{
-   if(!EnableDagExecution) {
-      // Fallback to direct execution
-      return TryPlaceOrder(type, lots, price, sl, tp, comment);
-   }
-   
-   bool dag_success = true;
-   string dag_trace = "";
-   
-   // === NODE 1: VALIDATION ===
-   dag_nodes[0].timestamp = TimeCurrent();
-   dag_nodes[0].passed = false;
-   
-   double min_lot = symbolInfo.LotsMin();
-   double max_lot = symbolInfo.LotsMax();
-   double lot_step = symbolInfo.LotsStep();
-   
-   if(lots < min_lot || lots > max_lot) {
-      dag_nodes[0].error_message = "Invalid lot size: " + DoubleToString(lots, 2) + 
-                                   " (min:" + DoubleToString(min_lot, 2) + 
-                                   " max:" + DoubleToString(max_lot, 2) + ")";
-      dag_trace += "Validation:FAIL;";
-      dag_success = false;
-   } else if(price <= 0) {
-      dag_nodes[0].error_message = "Invalid price: " + DoubleToString(price, 5);
-      dag_trace += "Validation:FAIL;";
-      dag_success = false;
-   } else {
-      dag_nodes[0].passed = true;
-      dag_trace += "Validation:OK;";
-   }
-   
-   // === NODE 2: RISK CHECK ===
-   if(dag_success) {
-      dag_nodes[1].timestamp = TimeCurrent();
-      dag_nodes[1].passed = false;
-      
-      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      double risk_amount = lots * MathAbs(price - sl) * symbolInfo.TickValue() / symbolInfo.TickSize();
-      double max_risk = equity * (RiskPercent / 100.0) * 2.0;  // Hard cap at 2x normal risk
-      
-      if(risk_amount > max_risk) {
-         dag_nodes[1].error_message = "Risk exceeded: $" + DoubleToString(risk_amount, 2) + 
-                                      " > $" + DoubleToString(max_risk, 2);
-         dag_trace += "RiskCheck:FAIL;";
-         dag_success = false;
-      } else {
-         dag_nodes[1].passed = true;
-         dag_trace += "RiskCheck:OK;";
-      }
-   }
-   
-   // === NODE 3: PREFLIGHT ===
-   if(dag_success) {
-      dag_nodes[2].timestamp = TimeCurrent();
-      dag_nodes[2].passed = false;
-      
-      if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) {
-         dag_nodes[2].error_message = "Trading not allowed in terminal";
-         dag_trace += "PreFlight:FAIL;";
-         dag_success = false;
-      } else if(!SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE)) {
-         dag_nodes[2].error_message = "Symbol trading disabled";
-         dag_trace += "PreFlight:FAIL;";
-         dag_success = false;
-      } else {
-         dag_nodes[2].passed = true;
-         dag_trace += "PreFlight:OK;";
-      }
-   }
-   
-   // === NODE 4: SUBMISSION ===
-   long ticket = -1;
-   if(dag_success) {
-      dag_nodes[3].timestamp = TimeCurrent();
-      dag_nodes[3].passed = false;
-      
-      trade.SetExpertMagicNumber(EA_MAGIC_NUMBER);
-      trade.SetDeviationInPoints(SlippagePoints);
-      
-      if(type == ORDER_TYPE_BUY) {
-         if(trade.Buy(lots, Symbol(), price, sl, tp, comment)) {
-            ticket = OrderGetTicket();
-            dag_nodes[3].passed = (ticket > 0);
-         }
-      } else {
-         if(trade.Sell(lots, Symbol(), price, sl, tp, comment)) {
-            ticket = OrderGetTicket();
-            dag_nodes[3].passed = (ticket > 0);
-         }
-      }
-      
-      if(!dag_nodes[3].passed) {
-         dag_nodes[3].error_message = "Order failed: " + ErrorDescription(GetLastError());
-         dag_trace += "Submission:FAIL;";
-         dag_success = false;
-      } else {
-         dag_trace += "Submission:OK(ticket=" + IntegerToString(ticket) + ");";
-      }
-   }
-   
-   // === NODE 5: CONFIRMATION ===
-   if(dag_success && ticket > 0) {
-      dag_nodes[4].timestamp = TimeCurrent();
-      dag_nodes[4].passed = false;
-      
-      Sleep(100);  // Brief pause for broker confirmation
-      if(PositionSelectByTicket(ticket)) {
-         dag_nodes[4].passed = true;
-         dag_trace += "Confirmation:OK;";
-         dag_success_count++;
-      } else {
-         dag_nodes[4].error_message = "Position confirmation failed for ticket #" + IntegerToString(ticket);
-         dag_trace += "Confirmation:FAIL;";
-         dag_success = false;
-         dag_failure_count++;
-      }
-   }
-   
-   // Handle DAG failure
-   if(!dag_success) {
-      dag_failure_count++;
-      last_dag_failure_time = TimeCurrent();
-      
-      // Find first failed node
-      for(int i=0; i<5; i++) {
-         if(!dag_nodes[i].passed) {
-            Print("DAG FAILED at Node ", i, " (", dag_nodes[i].node_name, "): ", dag_nodes[i].error_message);
-            break;
-         }
-      }
-      
-      // Log failed attempt to episodic memory
-      LogTradeToEpisodicMemory(ticket, type, lots, price, sl, tp, 
-                               0, 0.5, 0.5, "", dag_trace, "DAG_EXECUTION_FAILED");
-   }
-   
-   return dag_success;
-}
-
-//+------------------------------------------------------------------+
-//| END OF FILE — GoldHunter UHF AGI v8.3 Phase 3 Edition            |
-//+------------------------------------------------------------------+
+//--- End of GoldHunter UHF AGI v8 Phase 3 Complete Implementation

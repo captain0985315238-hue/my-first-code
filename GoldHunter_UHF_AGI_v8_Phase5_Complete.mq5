@@ -359,6 +359,7 @@ struct SessionWorkingMemory {
    double recent_regimes[10];      // Ring buffer: recent market regimes
    double recent_confidence[10];   // Ring buffer: recent confidence scores
    int    head_index;              // Current position in ring buffer
+   double regimeStabilityScore;    // PHASE 5: Stability score of recent regimes (0.0-1.0)
 
    double session_pnl;             // Cumulative P&L this session
    int    trades_today;            // Number of trades today
@@ -3024,7 +3025,7 @@ int Bayesian_SelectBestStrategy()
 //==========================================================================
 //  NeuralNetwork_Predict — Forward pass through pre-trained network
 //==========================================================================
-double NeuralNetwork_Predict(double &inputs[])
+double NeuralNetwork_Predict(double inputs[])
 {
    if(!UseNeuralNetwork) return 0.0;
 
@@ -3131,7 +3132,7 @@ void Xavier_InitWeights()
 //+------------------------------------------------------------------+
 //| NN_BuildInputVector — Build normalized 10-input feature vector   |
 //+------------------------------------------------------------------+
-void NN_BuildInputVector(double &inputs[10])
+void NN_BuildInputVector(double inputs[])
 {
    // All inputs normalized to [-1, +1] using historical min/max or natural bounds
    inputs[0] = (rsiValue - 50.0) / 50.0;                           // RSI: [0,100] → [-1,+1]
@@ -3141,7 +3142,7 @@ void NN_BuildInputVector(double &inputs[10])
    inputs[4] = (iClose(Symbol(), PERIOD_CURRENT, 1) - bbMiddle) /  
                ((bbUpper - bbLower) / 2.0 + 0.0001);               // BB position
    inputs[5] = (stochMain - 50.0) / 50.0;                          // Stoch: [0,100] → [-1,+1]
-   inputs[6] = (double)(marketRegime - 3) / 2.0;                    // Regime: [1,5] → [-1,+1]
+   inputs[6] = (double)(ctx.marketRegime - 3) / 2.0;                    // Regime: [1,5] → [-1,+1]
    inputs[7] = working_memory.regimeStabilityScore * 2.0 - 1.0;    // Stability → [-1,+1]
    inputs[8] = (atrValue / (prevAtrValue + 0.0001)) - 1.0;         // ATR expansion
    inputs[9] = (double)GetCurrentSessionBucket() / 3.0 * 2.0 - 1.0;// Session → [-1,+1]
@@ -3150,7 +3151,7 @@ void NN_BuildInputVector(double &inputs[10])
 //+------------------------------------------------------------------+
 //| NN_Forward — Forward pass with tanh activation                   |
 //+------------------------------------------------------------------+
-double NN_Forward(double &inputs[10])
+double NN_Forward(double inputs[])
 {
    double hidden[15];
    
@@ -3175,7 +3176,7 @@ double NN_Forward(double &inputs[10])
 //+------------------------------------------------------------------+
 //| NN_Backprop — Online learning with gradient clipping             |
 //+------------------------------------------------------------------+
-void NN_Backprop(double &inputs[10], double target, double learningRate)
+void NN_Backprop(double inputs[], double target, double learningRate)
 {
    double hidden[15];
    double hiddenDelta[15];
@@ -3278,7 +3279,7 @@ bool NN_LoadWeights_Binary()
    bool valid = true;
    for(int i = 0; i < 10 && valid; i++) {
       for(int j = 0; j < 15 && valid; j++) {
-         if(MathIsNaN(nnLayer.weights[i][j]) || MathIsInf(nnLayer.weights[i][j]))
+         if(!IsNumberValid(nnLayer.weights[i][j]))
             valid = false;
       }
    }
@@ -3291,6 +3292,14 @@ bool NN_LoadWeights_Binary()
    
    Print("[PH5] NN weights loaded successfully from ", filename);
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| MathIsValidNumber wrapper for NaN/Inf checks                    |
+//+------------------------------------------------------------------+
+bool IsNumberValid(double value)
+{
+   return (value == value && MathAbs(value) < 1e308);  // NaN != NaN, Inf is very large
 }
 
 //+------------------------------------------------------------------+
@@ -3343,7 +3352,9 @@ void QLearning_UpdateWithTrace(int stateIdx, int action, double reward, int next
 int GetCurrentSessionBucket()
 {
    datetime now = TimeCurrent();
-   int hour = TimeHour(now);
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+   int hour = dt.hour;
    
    // Asian: 00:00-08:00, London: 08:00-16:00, NY: 16:00-24:00
    if(hour >= 0 && hour < 8) return 0;      // Asian
@@ -3355,7 +3366,7 @@ int GetCurrentSessionBucket()
 //+------------------------------------------------------------------+
 //| NN_TrainOnTradeOutcome — Train NN on closed trade outcome        |
 //+------------------------------------------------------------------+
-void NN_TrainOnTradeOutcome(double &inputs[10], double profit)
+void NN_TrainOnTradeOutcome(double inputs[], double profit)
 {
    if(!UseNeuralNetwork) return;
    

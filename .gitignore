@@ -1,1 +1,69 @@
-Nothing should be ignored since the added file 'god_AGI_v8_Final_Complete.mq5' is a source code file (.mq5 is a MetaQuotes Language 5 source file for MQL5 programs). No build artifacts, dependencies, or temporary files are present in the changes.
+```
+# Compiled and binary files
+*.mq5.ex5
+*.mq5.gsc
+*.mq5.hst
+*.mq5.fxt
+*.ex4
+*.gsc
+*.hst
+*.fxt
+
+# Build artifacts
+*.obj
+*.o
+*.out
+
+# Dependencies and packages
+lib/
+include/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Coverage and test reports
+coverage/
+htmlcov/
+*.coverage
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```

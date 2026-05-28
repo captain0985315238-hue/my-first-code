@@ -889,6 +889,14 @@ void SendTradeAlerts(AgentContext &ctx)
          AccountInfoDouble(ACCOUNT_BALANCE), tradesThisDay));
 }
 
+//==========================================================================
+//  OnChartEvent — Button Click Handlers
+//==========================================================================
+void OnChartEvent(const int id, const long &lparam,
+                  const double &dparam, const string &sparam)
+{
+   if(id != CHARTEVENT_OBJECT_CLICK) return;
+
    if(sparam == SESSION_BUTTON_NAME) {
       manualSessionFilter = !manualSessionFilter;
       UpdateSessionControlButton();

@@ -1,1 +1,110 @@
-Nothing should be ignored since only a source code file (.mq5) was modified and no build artifacts, dependencies, or temporary files were detected in the changes.
+```
+# Compiled/Binary files
+*.mq5c
+*.ex5
+*.mqh
+*.mq4
+*.mq4c
+
+# MetaQuotes Language Editor
+*.gsc
+*.gch
+*.tpl
+
+# Build artifacts
+*.obj
+*.o
+*.exe
+*.dll
+*.so
+
+# Dependencies
+lib/
+libs/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage and testing
+.coverage
+coverage/
+htmlcov/
+
+# Distribution
+dist/
+build/
+target/
+
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# Gradle
+.gradle/
+build/
+
+# Compression files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+
+# System files
+.DS_Store
+Thumbs.db
+```
